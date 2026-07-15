@@ -1,0 +1,24 @@
+[package]
+name = "tcp_fs_poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+networked_filesystem = { path = "networked_filesystem" }
+tokio = { version = "1.52.3", features = ["full"] }
+
+[workspace]
+resolver = "3"
+members = ["server", "client", "networked_filesystem"]
+
+# Source - https://stackoverflow.com/a/36604610
+# Posted by Dogbert, modified by community. See post 'Timeline' for change history
+# Retrieved 2026-07-11, License - CC BY-SA 4.0
+
+[[bin]]
+name = "client"
+path = "client/src/main.rs"
+
+[[bin]]
+name = "server"
+path = "server/src/main.rs"

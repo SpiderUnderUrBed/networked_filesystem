@@ -1,0 +1,12 @@
+[package]
+name = "networked_filesystem"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+multer = "3.1.0"
+multipeek = "0.1.2"
+serde = "1.0.228"
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = "0.7.18"
