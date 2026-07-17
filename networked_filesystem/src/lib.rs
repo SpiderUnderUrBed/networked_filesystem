@@ -101,8 +101,8 @@ pub enum ChunkingStatus {
 impl ChunkingStatus {
     fn to_byte_header(&self) -> u8 {
         match self {
-            ChunkingStatus::Continues => 0,
-            ChunkingStatus::End => 1,
+            ChunkingStatus::Continues => 1,
+            ChunkingStatus::End => 0,
         }
     }
     fn from_byte_header(byte: u8) -> Option<ChunkingStatus> {
@@ -548,14 +548,17 @@ impl RemoteFileSystem<TcpFsReceiver> {
         })
     }
 }
-fn print_send_preview(buf: &[u8]) {
-    let first_n = buf.len().min(10);
-    let last_n = buf.len().min(10);
+fn log_head_tail(bytes: &[u8]) {
+    let n = bytes.len();
+    let head_n = n.min(10);
+    let tail_n = n.min(10);
+
+    let head = &bytes[..head_n];
+    let tail = &bytes[n - tail_n..];
+
     println!(
-        "sending {} bytes, first 10: {:?}, last 10: {:?}",
-        buf.len(),
-        &buf[..first_n],
-        &buf[buf.len() - last_n..]
+        "sending {} bytes | first {}: {:?} | last {}: {:?}",
+        n, head_n, head, tail_n, tail
     );
 }
 impl RemoteFileSystem<TcpFsSender> {
@@ -620,88 +623,54 @@ impl RemoteFileSystem<TcpFsSender> {
                             // Codec::RawContinues => {
                             // }
                             Codec::Multipart | Codec::RawContinues => {
-                                // TODO: consider if i need to fill and therfore allocate
-                                // the capacity of the max size this buffer could be
-                                let mut temp_buf: Vec<u8> = Vec::with_capacity(4080);
+                                //let mut temp_buf: Vec<u8> = Vec::with_capacity(4080);
                                 //let mut position: u16 = 20;
                                 let direction_header = self.direction.to_byte_header().unwrap();
                                 let operation_header = self.operation.to_byte_header().unwrap();
                                 let codec_header = self.codec.to_byte_header().unwrap();
 
-                                let mut delimiter_offset = 0;
-                                if let Some(start_delims) = &self.state.start_delimiter {
-                                    delimiter_offset = start_delims.len();
-                                    temp_buf.extend(start_delims);
-                                }
-                                temp_buf.push(direction_header);
-                                temp_buf.push(operation_header);
-                                // If it cannot fill the buffer change this to 1 to say it continues
-                                temp_buf.push(codec_header);
-                                // This says it does not continue, this will change if there is more to the buffer
-                                temp_buf.push(1);
+                                //let mut delimiter_offset = 0;
 
                                 loop {
                                     let mut file_content_stream =
                                         file.content_stream.take().unwrap();
+
                                     match file_content_stream.recv().await {
-                                        Ok(mut bytes) => {
-                                            temp_buf.extend(bytes);
-                                            if temp_buf.len() >= 4076 {
-                                                let temp_buf_clone = temp_buf.clone();
-                                                let (left, right) = temp_buf_clone.split_at(4076);
-                                                let mut new_buf = left.to_vec();
-                                                temp_buf.drain(..new_buf.len());
-                                                if let Some(end_delims) = &self.state.end_delimiter {
-                                                    new_buf.extend(end_delims);
-                                                }   
-                                                new_buf[delimiter_offset + 3] = 0;
-                                                self.state.send(new_buf).await;
-                                                // new_buf = Vec::new();
-                                                // new_buf.push(direction_header);
-                                                // new_buf.push(operation_header);
-                                                // new_buf.push(codec_header);
-                                                // new_buf.push(1);
-                                                // new_buf.extend_from_slice(right);
-                                                // if let Some(end_delims) = &self.state.end_delimiter {
-                                                //     new_buf.extend(end_delims);
-                                                // }
-                                                // temp_buf.drain(..new_buf.len());
+                                        Ok(bytes) => {
+                                            // TODO: consider if i need to fill and therfore allocate
+                                            // the capacity of the max size this buffer could be
+                                            let mut temp_buf: Vec<u8> = Vec::with_capacity(4096);
+
+                                            let chunks: Vec<&[u8]> = bytes.chunks(4076).collect();
+                                            let chunks_length = chunks.len();
+                                            for (i, chunk) in chunks.into_iter().enumerate() {
+                                                if let Some(start_delims) =
+                                                    &self.state.start_delimiter
+                                                {
+                                                    //delimiter_offset = start_delims.len();
+                                                    temp_buf.extend(start_delims);
+                                                }
+                                                temp_buf.push(direction_header);
+                                                temp_buf.push(operation_header);
+                                                temp_buf.push(codec_header);
+                                                if chunks_length == i {
+                                                    temp_buf.push(1);
+                                                } else {
+                                                    temp_buf.push(0);
+                                                }
+                                                temp_buf.extend_from_slice(chunk);
+                                                if let Some(end_delims) = &self.state.end_delimiter
+                                                {
+                                                    temp_buf.extend(end_delims);
+                                                }
                                             }
-                                            while temp_buf.len() >= 4076 {
-                                                let temp_buf_clone = temp_buf.clone();
-                                                let (left, right) = temp_buf_clone.split_at(4076);
-                                                let mut new_buf: Vec<u8> = Vec::new();
-                                                let continues: u8 = if temp_buf.len()-4076 > 4076 { 0 } else { 1 };
-                                                new_buf.push(direction_header);
-                                                new_buf.push(operation_header);
-                                                new_buf.push(codec_header);
-                                                new_buf.push(continues);
-                                                new_buf.extend_from_slice(left);
-                                                if let Some(end_delims) = &self.state.end_delimiter {
-                                                    new_buf.extend(end_delims);
-                                                }  
-                                                temp_buf.drain(..new_buf.len());
-                                                self.state.send(new_buf).await;
-                                            }
+                                            self.state.send(temp_buf).await;
 
                                         }
-                                        Err(e) => match e {
-                                            broadcast::error::RecvError::Closed => {
-                                                println!("closed");
-                                                break;
-                                            }
-                                            broadcast::error::RecvError::Lagged(_) => {
-                                                println!("lagged");
-                                            }
-                                        },
+                                        _ => {}
                                     }
                                     file.content_stream = Some(file_content_stream);
                                 }
-                                println!("sending the rest of the stream");
-                                if let Some(end_delims) = &self.state.end_delimiter {
-                                    temp_buf.extend(end_delims);
-                                }
-                                self.state.send(temp_buf).await;
                             }
                             _ => return Err("unimplimented".into()),
                         }
@@ -763,35 +732,91 @@ pub trait FsType: Clone + Send + Sync {}
 impl FsType for TcpFsSender {}
 impl FsType for TcpFsReceiver {}
 
-                                  // fix_last_buffer = true;
-                                                // println!("sending new chunk");
-                                                // let mut new_buf = Vec::new();
-                                                // let chunk: Vec<u8> =
-                                                //     temp_buf.drain(..4076).collect();
-                                                // if let Some(start_delims) =
-                                                //     &self.state.start_delimiter
-                                                // {
-                                                //     new_buf.extend(start_delims);
-                                                // }
-                                                // let continues = 
-                                                //     { if temp_buf.len() > 4076 { 0 } else { 1 } };
-                                                // new_buf.push(direction_header);
-                                                // new_buf.push(operation_header);
-                                                // new_buf.push(codec_header);
 
-                                                // new_buf.push(continues);
-                                                // new_buf.extend(chunk);
-                                                // if let Some(end_delims) = &self.state.end_delimiter
-                                                // {
-                                                //     new_buf.extend(end_delims);
-                                                // }
-                                                // print_send_preview(&new_buf);
-                                                // self.state.send(new_buf).await;
-                                                // // if temp_buf.len() >= 4076 {
-                                                // // } else {
-                                                // // }
-                                                // println!("done sending new chunk");
+// temp_buf.push(direction_header);
+// temp_buf.push(operation_header);
+// // If it cannot fill the buffer change this to 1 to say it continues
+// temp_buf.push(codec_header);
+// // This says it does not continue, this will change if there is more to the buffer
+// temp_buf.push(1);
 
+// loop {
+//     let mut file_content_stream =
+//         file.content_stream.take().unwrap();
+//     match file_content_stream.recv().await {
+//         Ok(bytes) => {
+//                 if (bytes.len() as u16 + temp_buf.len() as u16) >= 4076 {
+//                     println!("continuing");
+//                     temp_buf[delimiter_offset + 3] = 0;
+//                     // self.state.send(temp_buf.clone()).await;
+//                     let previous_bytes_len = temp_buf.len();
+//                     temp_buf.extend_from_slice(&bytes);
+//                     loop {
+//                         let mut new_buf: Vec<u8> = temp_buf.drain(..previous_bytes_len).collect();
+//                         if let Some(end_delims) = &self.state.end_delimiter {
+//                             new_buf.extend(end_delims);
+//                         }
+//                         // temp_buf = Vec::new();
+//                         self.state.send(new_buf.clone()).await;
+//                         if let Some(start_delims) = &self.state.start_delimiter {
+//                             delimiter_offset = start_delims.len();
+//                             temp_buf.extend(start_delims);
+//                         }
+//                         temp_buf.push(direction_header);
+//                         temp_buf.push(operation_header);
+//                         temp_buf.push(codec_header);
+//                         temp_buf.push(1);
+//                         println!("byte len {}", bytes.len());
+//                         if (bytes.len() >= 4096)  || ((bytes.len() as u16 + temp_buf.len() as u16) < 4076) {
+//                             break;
+//                         }
+//                     }
+//                     // temp_buf.extend_from_slice(&bytes);
+//                     // if (bytes.len() as u16 + temp_buf.len() as u16) < 4076 {
+//                     //     break;
+//                     // }
+//                     break;
+//                     //break;
+//                 } else {
+//                     // Add the current data onto the buffer
+//                     println!("extending");
+//                     //position = bytes.len() as u16;
+//                     temp_buf.extend_from_slice(&bytes);
+//                     break;
+//                 }
+//             //}
+//         }
+//         Err(e) => {
+//             match e {
+//                 broadcast::error::RecvError::Closed => {
+//                     println!("closed");
+//                     break;
+//                 }
+//                 broadcast::error::RecvError::Lagged(_) => {
+//                     println!("lagged");
+//                 }
+//             }
+//         }
+//     }
+//     file.content_stream = Some(file_content_stream);
+// }
+// if let Some(end_delims) = &self.state.end_delimiter {
+//     temp_buf.extend(end_delims);
+// }
+//self.state.send(temp_buf).await;
+// self.file.content_stream = Some(stream);
+// self.recv_future = None;
+// if bytes.len() >= 4076 {
+//     println!("too long");
+//     return Err(
+//         "cannot send over 4076 bytes as a segment"
+//             .into(),
+//     );
+// }
+// This will continue on to the next message
+// so signify it continues then return the current buffer
+//println!("{} {}", bytes.len(), position);
+//loop {
 // pub struct RemoteFileSystem<S: FsType> {
 //     state: S,
 //     local_state: HashMap<String, LocalState>,
@@ -822,82 +847,3 @@ impl FsType for TcpFsReceiver {}
 // }
 // trait WorkingFs: Clone + Send + Sync {
 // }
-
-                                            // if fix_last_buffer && temp_buf.len() > 0 {
-                                            //     let mut new_buf = Vec::new();
-                                            //     new_buf.push(direction_header);
-                                            //     new_buf.push(operation_header);
-                                            //     new_buf.push(codec_header);
-                                            //     new_buf.push(1);
-                                            //     new_buf.extend(temp_buf.drain(..));
-                                            //     temp_buf = new_buf;
-                                            // }
-                                            //}
-                                            // loop {
-                                            //     let mut new_buf: Vec<u8> = bytes.drain(..(4076 - temp_buf.len() as u16)).collect();
-                                            //     if let Some(end_delims) = &self.state.end_delimiter {
-                                            //         new_buf.extend(end_delims);
-                                            //     }
-                                            //     // temp_buf = Vec::new();
-                                            //     self.state.send(new_buf.clone()).await;
-                                            //     if let Some(start_delims) = &self.state.start_delimiter {
-                                            //         delimiter_offset = start_delims.len();
-                                            //         temp_buf.extend(start_delims);
-                                            //     }
-                                            //     temp_buf.push(direction_header);
-                                            //     temp_buf.push(operation_header);
-                                            //     temp_buf.push(codec_header);
-                                            //     temp_buf.push(1);
-                                            //     println!("byte len {}", bytes.len());
-                                            // }
-                                            // temp_buf.extend_from_slice(&bytes);
-                                            // if (bytes.len() as u16 + temp_buf.len() as u16) < 4076 {
-                                            //     break;
-                                            // }
-                                            //break;
-                                            //break;
-                                            // } else {
-                                            //     // Add the current data onto the buffer
-                                            //     println!("extending");
-                                            //     //position = bytes.len() as u16;
-                                            //     temp_buf.extend_from_slice(&bytes);
-                                            //     //break;
-                                            // }
-                                            //}
-
-                                            // // self.file.content_stream = Some(stream);
-                                            // // self.recv_future = None;
-                                            // // if bytes.len() >= 4076 {
-                                            // //     println!("too long");
-                                            // //     return Err(
-                                            // //         "cannot send over 4076 bytes as a segment"
-                                            // //             .into(),
-                                            // //     );
-                                            // // }
-                                            // // This will continue on to the next message
-                                            // // so signify it continues then return the current buffer
-                                            // //println!("{} {}", bytes.len(), position);
-                                            // //loop {
-                                            // if (bytes.len() as u16 + temp_buf.len() as u16) >= 4076
-                                            // {
-                                            //     println!("continuing");
-                                            //     temp_buf[delimiter_offset + 3] = 0;
-                                            // }
-                                            // // self.state.send(temp_buf.clone()).await;
-                                            // //let previous_bytes_len = temp_buf.len();
-                                            // temp_buf.extend_from_slice(&bytes);
-                                            // if temp_buf.len() >= 4076 {
-                                            //     let mut first_chunk: Vec<u8> =
-                                            //         temp_buf.drain(..4076).collect();
-                                            //     if let Some(end_delims) = &self.state.end_delimiter
-                                            //     {
-                                            //         first_chunk.extend(end_delims);
-                                            //     }
-                                            //     print_send_preview(&first_chunk);
-                                            //     self.state.send(first_chunk).await;
-                                            // }
-                                            // println!("sending current chunk");
-                                            // //self.state.send(first_chunk).await;
-                                            // //for (i, chunk) in temp_buf.clone().chunks(4076).enumerate(){
-                                            // //'continuation: {
-                                            // let mut fix_last_buffer = false;
