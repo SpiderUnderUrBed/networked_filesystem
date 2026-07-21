@@ -641,7 +641,7 @@ impl RemoteFileSystem<TcpFsSender> {
                                             // the capacity of the max size this buffer could be
                                             let mut temp_buf: Vec<u8> = Vec::with_capacity(4096);
 
-                                            let chunks: Vec<&[u8]> = bytes.chunks(4076).collect();
+                                            let chunks: Vec<&[u8]> = bytes.chunks(1000).collect();
                                             let chunks_length = chunks.len();
                                             for (i, chunk) in chunks.into_iter().enumerate() {
                                                 if let Some(start_delims) =
