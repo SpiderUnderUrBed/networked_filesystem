@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::Receiver,
     },
-    task::{Context, Poll},
+    task::{Context, Poll}, vec,
 };
 
 use multer::bytes::buf;
@@ -493,19 +493,24 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                                         }
                                                         break 'start_delim;
                                                     }
+                                                    let new_location = "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt";
                                                     if file_handle.is_none() {
+                                                        println!("{:?}", location);
                                                         let mut temp_handle =
                                                             std::fs::OpenOptions::new()
                                                                 .append(true)
-                                                                .open(&mut *location);
+                                                                .open(new_location);
+                                                                //.open(&mut *location);
                                                         if let Err(_) = temp_handle {
                                                             let _ = std::fs::File::create(
-                                                                &mut *location,
+                                                                //&mut *location,
+                                                                new_location
                                                             );
                                                             temp_handle =
                                                                 std::fs::OpenOptions::new()
                                                                     .append(true)
-                                                                    .open(&mut *location);
+                                                                    .open(new_location)
+                                                                    //.open(&mut *location);
                                                         }
                                                         file_handle = Some(temp_handle.unwrap());
                                                     }
@@ -614,7 +619,7 @@ impl RemoteFileSystem<TcpFsSender> {
                     let mut files = std::mem::take(&mut self.files);
                     for mut file in files.drain(..) {
                         self.operation = Operation::Set;
-                        let _ = self.execute_operation(fs_state_name.clone()).await;
+                        let _ = self.execute_operation(file.final_location.clone()).await;
                         self.operation = Operation::Move;
                         match self.codec {
                             Codec::Raw => {
@@ -629,6 +634,7 @@ impl RemoteFileSystem<TcpFsSender> {
                                 let operation_header = self.operation.to_byte_header().unwrap();
                                 let codec_header = self.codec.to_byte_header().unwrap();
 
+                                let mut previous_buf: Vec<u8> =  Vec::with_capacity(4096);
                                 //let mut delimiter_offset = 0;
 
                                 loop {
@@ -637,11 +643,18 @@ impl RemoteFileSystem<TcpFsSender> {
 
                                     match file_content_stream.recv().await {
                                         Ok(bytes) => {
-                                            // TODO: consider if i need to fill and therfore allocate
-                                            // the capacity of the max size this buffer could be
+                                            previous_buf.extend(bytes.clone());
+                                            if previous_buf.len() < 1000 {
+                                                file.content_stream = Some(file_content_stream);
+                                                continue;
+                                            }
+                                            // temp_buf = vec![];
+                                            // temp_buf = previous_buf.clone();
                                             let mut temp_buf: Vec<u8> = Vec::with_capacity(4096);
 
-                                            let chunks: Vec<&[u8]> = bytes.chunks(1000).collect();
+                                            // TODO: consider if i need to fill and therfore allocate
+                                            // the capacity of the max size this buffer could be
+                                            let chunks: Vec<&[u8]> = previous_buf.chunks(1000).collect();
                                             let chunks_length = chunks.len();
                                             for (i, chunk) in chunks.into_iter().enumerate() {
                                                 if let Some(start_delims) =
@@ -667,7 +680,35 @@ impl RemoteFileSystem<TcpFsSender> {
                                             self.state.send(temp_buf).await;
 
                                         }
-                                        _ => {}
+                                        Err(e) => {
+                                            match e {
+                                                broadcast::error::RecvError::Closed => {
+                                                    // println!("closing");
+                                                    let mut temp_buf: Vec<u8> = Vec::with_capacity(4096);
+                                                    if let Some(start_delims) =
+                                                        &self.state.start_delimiter
+                                                    {
+                                                        //delimiter_offset = start_delims.len();
+                                                        temp_buf.extend(start_delims);
+                                                    }
+                                                    temp_buf.push(direction_header);
+                                                    temp_buf.push(operation_header);
+                                                    temp_buf.push(codec_header);
+                                                    temp_buf.push(1);
+                                                    temp_buf.extend(previous_buf.clone());
+                                                    if let Some(end_delims) = &self.state.end_delimiter
+                                                    {
+                                                        temp_buf.extend(end_delims);
+                                                    }
+                                                    println!("{:#?}", temp_buf.len());
+                                                    self.state.send(temp_buf.clone()).await;
+                                                    break;
+                                                },
+                                                broadcast::error::RecvError::Lagged(_) => {
+
+                                                },
+                                            }
+                                        }
                                     }
                                     file.content_stream = Some(file_content_stream);
                                 }

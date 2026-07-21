@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{fs::File as StdFile, io::{BufReader, Read}, path::Path, sync::{Arc, atomic::AtomicBool}};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     "main".to_string(),
                     LocalState {
                         // TODO: set back to /
-                        location: "/home/spiderunderurbed/projects/tcp_fs_poc/filesystem_demo.txt"
+                        location: "/"
                             .to_string(),
                     },
                 );
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let file = File {
                     original_location: None,
                     final_location:
-                        "/home/spiderunderurbed/projects/tcp_fs_poc/filesystem_demo.txt".to_owned(),
+                        "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt".to_owned(),
                     content_stream: Some(rx.resubscribe()),
                 };
                 filesystem.append_files(file);
@@ -106,36 +106,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let state = arc_state_clone.write().await;
                 let mut filesystem = state.filesystem.write().await;
                 let _ = filesystem.execute_operation("main".to_string()).await;
-                // println!("{:#?}", buffer_result);
             });
-            // tx.send("tester".as_bytes().to_vec())?;
-            // let payload = "tester ".repeat(600);
-            // let bytes = payload.as_bytes();
 
-            // const CHUNK_SIZE: usize = 4050;
+            let file_path = Path::new("/home/spiderunderurbed/projects/tcp_fs_poc/test.txt");
+            // let file = StdFile::open(file_path)?;
+            // let reader = BufReader::new(file);
 
-            // for chunk in bytes.chunks(CHUNK_SIZE) {
-            //     tx.send(chunk.to_vec())?;
+            // for byte_result in reader.bytes() {
+            //     match byte_result {
+            //         Ok(byte) => {
+            //             tx.send(vec![byte])?;
+            //         },
+            //         Err(e) => {
+            //             eprintln!("\nError reading byte: {}", e);
+            //             return Err(e.into());
+            //         }
+            //     }
             // }
-            // let payload: String = (0..=5000).map(|i| format!("{} ", i)).collect();
+
+            let file = StdFile::open(file_path)?;
+            let mut reader = BufReader::new(file);
+            let mut chunk = vec![0u8; 1000];
+
+            loop {
+                let n = reader.read(&mut chunk)?;
+                if n == 0 {
+                    break;
+                }
+                tx.send(chunk[..n].to_vec())?;
+            }
+
+            // let payload: String = (0..=10000).map(|i| format!("{} ", i)).collect();
             // let bytes = payload.as_bytes();
             // tx.send(bytes.to_vec())?;
-            let payload: String = (0..=5000).map(|i| format!("{} ", i)).collect();
-            let bytes = payload.as_bytes();
-            tx.send(bytes.to_vec())?;
-
-            // const CHUNK_SIZE: usize = 2850;
-
-            // for chunk in bytes.chunks(CHUNK_SIZE) {
-            //     tx.send(chunk.to_vec())?;
-            // }
-            // const CHUNK_SIZE: usize = 4050;
-
-            // for chunk in bytes.chunks(CHUNK_SIZE) {
-            //     tx.send(chunk.to_vec())?;
-            // }
+            println!("going to drop tx");
             drop(tx);
-            //tx_option = None;
             if let Err(e) = handle.await {
                 eprintln!("task panicked: {e:?}");
             }
