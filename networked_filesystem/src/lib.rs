@@ -286,267 +286,246 @@ impl RemoteFileSystem<TcpFsReceiver> {
         Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
     > {
         Box::pin(async move {
-            loop {
+            let mut raw_current_buffer: Vec<u8> = Vec::with_capacity(4096);
+
+            let mut file_buffer: Vec<u8> = Vec::with_capacity(4096);
+            let mut direction: Option<Direction> = None;
+            let mut operation: Option<Operation> = None;
+            let mut codec: Option<Codec> = None;
+            let mut continues: Option<ChunkingStatus> = None;
+
+            let mut file_handle = None;
+
+            let mut location = {
+                match self.local_state.get(&fs_state_name) {
+                    Some(fs_state) => fs_state.location.clone(),
+                    None => "/tmp/fserror".to_string(),
+                }
+            };
+
+            'end: loop {
+                let mut start_deliter_offset = 0;
+                let mut end_deliter_offset;
                 match self.state.rx.recv().await {
                     Ok(bytes) => {
-                        // I push one new byte to the start of the array
-                        // as the very first byte is glossed over for starting delimiter
-                        // detection and this is better than special case handling
+                        raw_current_buffer.extend(bytes.clone());
+                        end_deliter_offset = bytes.len();
                         let mut new_bytes = Vec::with_capacity(bytes.len() + 1);
                         new_bytes.push(0);
                         new_bytes.extend(bytes);
-                        // I create a multipeak array which lets me to see
-                        // some amount of bytes into the future somewhat efficently
                         let mut bytes_iter = new_bytes.into_iter().multipeek();
-                        // Defines whether or not im collecting the next few bytes until the end of the buffer
-                        // and/or the end delimiter is detected
-                        let mut collecting_buffer = false;
-
-                        // A file handle will be kept for file transfer operations which has not finished
-                        let mut file_handle = None;
-                        while let Some(_) = bytes_iter.peek() {
-                            let mut direction: Option<Direction> = None;
-                            let mut operation: Option<Operation> = None;
-                            let mut codec: Option<Codec> = None;
-                            let mut continues: Option<ChunkingStatus> = None;
-                            let location = {
-                                match self.local_state.get(&fs_state_name) {
-                                    Some(fs_state) => &mut fs_state.location.clone(),
-                                    None => &mut "/tmp/fserror".to_string(),
-                                }
-                            };
-
-                            'end: while let Some(byte) = bytes_iter.next() {
-                                'start_delim: {
-                                    let mut deliter_offset = 0;
-                                    if let Some(start_delimiter) = &self.state.start_delimiter {
-                                        deliter_offset = start_delimiter.len();
-                                        if !collecting_buffer {
-                                            // Go through the starting delimiter bytes and see if
-                                            // a matching pattern has been detected
-                                            // if no breaks occur then it
-                                            // will start collecting the buffer
-                                            for (i, delimiter_byte) in
-                                                start_delimiter.iter().enumerate()
-                                            {
-                                                // look ahead for the specific starting delimiter byte
-                                                if let Some(future_byte) = bytes_iter.peek_nth(i) {
-                                                    if future_byte != delimiter_byte {
-                                                        // the next byte does not match with the delimiter byte, go to
-                                                        // next loop
-                                                        break 'start_delim;
-                                                    }
-                                                } else {
-                                                    // there is nothing more to check for when looking for a starting delimiter
-                                                    // just end it here
-                                                    break 'end;
-                                                }
-                                            }
-                                        }
-                                        // Nothing broke back to the loop
-                                        // therfore the starting delimiter
-                                        // pattern has been found next
-                                        // start collecting the buffer
-                                        collecting_buffer = true;
-                                    } else {
-                                        // The user did not set a starting delimiter, immediately try to collect from
-                                        // the buffer
-                                        collecting_buffer = true;
+                        //'searching: while let Some(_) = bytes_iter.peek() {
+                        // 'searching_start_delims: while let Some(_) = bytes_iter.next() {
+                        //     'start_delim: {
+                        //         if let Some(start_delimiter) = &self.state.start_delimiter {
+                        //             //deliter_offset = start_delimiter.len();
+                        //             for (i, delimiter_byte) in start_delimiter.iter().enumerate() {
+                        //                 if let Some(future_byte) = bytes_iter.peek_nth(i) {
+                        //                     if future_byte != delimiter_byte {
+                        //                         start_deliter_offset += 1;
+                        //                         break 'start_delim;
+                        //                     }
+                        //                 } else {
+                        //                     break 'end;
+                        //                 }
+                        //             }
+                        //             start_deliter_offset = start_deliter_offset + start_delimiter.len();
+                        //             break 'searching_start_delims;
+                        //         } else {
+                        //             break 'searching_start_delims;
+                        //         }
+                        //     }
+                        // }
+                        start_deliter_offset = {
+                            if let Some(start_delimiter) = &self.state.start_delimiter {
+                                find_subsequence(&raw_current_buffer, start_delimiter).unwrap_or(0)
+                            } else {
+                                0
+                            }
+                        };
+                        for _ in 0..start_deliter_offset {
+                            bytes_iter.next();
+                        };
+                        println!("start:{}\nend:{}", start_deliter_offset, end_deliter_offset);
+                        println!(
+                            "{:?}\n{:?}\n{:?}\noffset: {}\nend_offset: {}",
+                            String::from_utf8_lossy(&raw_current_buffer[0..10]),
+                            String::from_utf8_lossy(&raw_current_buffer[start_deliter_offset..start_deliter_offset + 10]),
+                            String::from_utf8_lossy(&raw_current_buffer[start_deliter_offset..end_deliter_offset]),
+                            start_deliter_offset,
+                            end_deliter_offset
+                        );
+                        if bytes_iter.peek_nth(2).is_none() {
+                            println!("err cannot pick any new operations or so on");
+                            break;
+                        }
+                        let current_byte = bytes_iter.next().unwrap();
+                        println!("current byte: {:#?}", current_byte.clone());
+                        if direction.is_none() {
+                            // direction = Direction::from_byte_header(current_byte);
+                            match Direction::from_byte_header(*bytes_iter.peek_nth(1).unwrap()) {
+                                Some(new_direction) => {
+                                    direction = Some(new_direction);
+                                },
+                                None => {
+                                    if direction.is_none() {
+                                        println!("no direction");
+                                        return Err("invalid, no direction was processed".into());
                                     }
-                                    // start collecting the buffer
-                                    if collecting_buffer {
-                                        // If an end delimiter is set, always keep looking for it
-                                        if let Some(end_delimiter) = &self.state.end_delimiter {
-                                            // if what was seen is not apart of a end delimiter it will break to this
-                                            // loop and continue
-                                            'end_delim: {
-                                                // Go through all the end delimiters bytes, if there is another
-                                                // byte left in the buffer or the sequence of potential end delimiters is
-                                                // terminated end it
-                                                for (i, delimiter_byte) in
-                                                    end_delimiter.iter().enumerate()
-                                                {
-                                                    if let Some(future_byte) =
-                                                        bytes_iter.peek_nth(end_delimiter.len() + i)
-                                                    {
-                                                        if future_byte != delimiter_byte {
-                                                            break 'end_delim;
-                                                        }
-                                                    } else {
-                                                        break 'end_delim;
-                                                    }
-                                                }
-                                                // This part handles the end of operations, right
-                                                // after the end delimiter
+                                },
+                            }
+                            bytes_iter.next();
+                            //break 'end;
+                        }
+                        // Ensures an operation was set
+                        if operation.is_none() {
+                            match Operation::from_byte_header(*bytes_iter.peek_nth(1).unwrap()) {
+                                Some(new_operation) => {
+                                    operation = Some(new_operation);
+                                },
+                                None => {
+                                    if operation.is_none() {
+                                        println!("no operation");
+                                        return Err("invalid, no operation was processed".into());
+                                    }
+                                },
+                            }
+                            bytes_iter.next();
+                            if matches!(operation.clone().unwrap(), Operation::Set)
+                                || matches!(operation.clone().unwrap(), Operation::Ls)
+                            {
+                                location.clear();
+                            } else if matches!(operation.clone().unwrap(), Operation::Move) {
+                                if bytes_iter.peek_nth(2).is_none() {
+                                    println!("err cannot pick the operations for move");
+                                    break;
+                                }
+                                if codec.is_none() {
+                                    match Codec::from_byte_header(*bytes_iter.peek_nth(1).unwrap()) {
+                                        Some(new_codec) => {
+                                            codec = Some(new_codec);
+                                        },
+                                        None => {},
+                                    }
+                                    if codec.is_none() {
+                                        println!("still no codec");
+                                        return Err("invalid, no codec was processed".into());
+                                    }
+                                    bytes_iter.next();
+                                }
 
-                                                // if the location was completely set, and its the end of the
-                                                // set operation, it will set the local states location to what
-                                                // location
-                                                if let Some(final_operation) = operation {
-                                                    // TODO: consider if i want to use matches! or match
-                                                    if matches!(final_operation, Operation::Set) {
-                                                        if let Some(local_state) =
-                                                            self.local_state.get_mut(&fs_state_name)
-                                                        {
-                                                            local_state.location =
-                                                                location.to_string();
-                                                        } else {
-                                                            return Err("no state added".into());
-                                                        }
-                                                        self.patch_state_location_path(
-                                                            &fs_state_name,
-                                                        );
-                                                    }
-                                                    if matches!(final_operation, Operation::Ls) {
-                                                        let mut temp_buf = Vec::new();
-                                                        // start pushing the direction and operation
-                                                        temp_buf.push(
-                                                            Direction::to_byte_header(
-                                                                &self.direction,
-                                                            )
-                                                            .unwrap(),
-                                                        );
-                                                        temp_buf.push(
-                                                            Operation::to_byte_header(
-                                                                &Operation::Ls,
-                                                            )
-                                                            .unwrap(),
-                                                        );
-                                                        // Assume it will not continue
-                                                        temp_buf.push(0);
-                                                        let files = std::fs::read_dir(location)
-                                                            .expect("invalid directory");
-                                                        for file_result in files {
-                                                            if let Ok(file) = file_result {
-                                                                temp_buf.push(file.file_name().len().try_into().expect("this system seems to allow filenames over 4096, this is not supported"));
-                                                                temp_buf.extend_from_slice(
-                                                                    file.file_name().as_bytes(),
-                                                                );
-                                                            }
-                                                        }
-                                                        println!("about to send dir back");
-                                                        self.state.send(temp_buf);
-                                                    }
-                                                }
-                                                collecting_buffer = false;
-                                                break 'end;
-                                            }
-                                        }
-
-                                        // Looks ahead to see past the delimiter
-                                        if let Some(byte) = bytes_iter.peek_nth(deliter_offset) {
-                                            // Ensures direction is set
-                                            if direction.is_none() {
-                                                direction = Direction::from_byte_header(*byte);
-                                                if direction.is_none() {
-                                                    println!("no direction");
-                                                    return Err(
-                                                        "invalid, no direction was processed"
-                                                            .into(),
-                                                    );
-                                                }
-                                                break 'start_delim;
-                                            }
-                                            // Ensures an operation was set
-                                            if operation.is_none() {
-                                                operation = Operation::from_byte_header(*byte);
-                                                if operation.is_none() {
-                                                    println!("no operation");
-                                                    return Err(
-                                                        "invalid, no operation was processed"
-                                                            .into(),
-                                                    );
-                                                }
-                                                if matches!(
-                                                    operation.clone().unwrap(),
-                                                    Operation::Set
-                                                ) || matches!(
-                                                    operation.clone().unwrap(),
-                                                    Operation::Ls
-                                                ) {
-                                                    location.clear();
-                                                }
-                                                break 'start_delim;
-                                            }
-                                            match operation.clone().unwrap() {
-                                                Operation::Move => {
-                                                    if codec.is_none() {
-                                                        codec = Codec::from_byte_header(*byte);
-                                                        if codec.is_none() {
-                                                            return Err(
-                                                                "invalid, no codec was processed"
-                                                                    .into(),
-                                                            );
-                                                        }
-                                                        break 'start_delim;
-                                                    }
-
-                                                    if continues.clone().is_none() {
-                                                        continues =
-                                                            ChunkingStatus::from_byte_header(*byte);
-                                                        println!(
-                                                            "this is continues: {:#?}",
-                                                            continues
-                                                        );
-                                                        if continues.is_none() {
-                                                            return Err("invalid, no continuation was processed".into());
-                                                        }
-                                                        break 'start_delim;
-                                                    }
-                                                    if file_handle.is_none() {
-                                                        let mut temp_handle =
-                                                            std::fs::OpenOptions::new()
-                                                                .append(true)
-                                                                .open(&mut *location);
-                                                        if let Err(_) = temp_handle {
-                                                            let _ = std::fs::File::create(
-                                                                &mut *location,
-                                                            );
-                                                            temp_handle =
-                                                                std::fs::OpenOptions::new()
-                                                                    .append(true)
-                                                                    .open(&mut *location);
-                                                        }
-                                                        file_handle = Some(temp_handle.unwrap());
-                                                    }
-                                                    let mut local_handle =
-                                                        file_handle.take().unwrap();
-                                                    let _ = local_handle.write_all(&[*byte]);
-                                                    if matches!(
-                                                        continues.clone().unwrap(),
-                                                        ChunkingStatus::Continues
-                                                    ) {
-                                                        file_handle = Some(local_handle);
-                                                    }
-                                                    // location.clear();
-                                                }
-                                                Operation::Set => {
-                                                    location.push(char::from(*byte));
-                                                }
-                                                Operation::Ls => {
-                                                    location.push(char::from(*byte));
-                                                }
-                                                Operation::None => todo!(),
-                                            }
-                                        }
+                                if continues.clone().is_none() {
+                                    match ChunkingStatus::from_byte_header(
+                                        *bytes_iter.peek_nth(1).unwrap(),
+                                    ) {
+                                        Some(new_continues) => {
+                                            continues = Some(new_continues);
+                                        },
+                                        None => {},
+                                    }
+                                    println!("this is continues: {:#?}", continues);
+                                    if continues.is_none() {
+                                        println!("still no continues");
+                                        return Err("invalid, no continuation was processed".into());
                                     }
                                 }
                             }
                         }
+
+                        // 'searching_end_delims: while let Some(_) = bytes_iter.next() {
+                        //     'end_delim: {
+                        //         if let Some(end_delimiter) = &self.state.end_delimiter {
+                        //             //deliter_offset = start_delimiter.len();
+                        //             for (i, delimiter_byte) in end_delimiter.iter().enumerate() {
+                        //                 if let Some(future_byte) = bytes_iter.peek_nth(i) {
+                        //                     if future_byte != delimiter_byte {
+                        //                         bytes_iter.nth(i);
+                        //                         break 'end_delim;
+                        //                     }
+                        //                 } else {
+                        //                     break 'end;
+                        //                 }
+                        //             }
+                        //         } else {
+                        //             break 'searching_end_delims;
+                        //         }
+                        //     }
+                        // }
+
+                        end_deliter_offset = {
+                            if let Some(end_delimiter) = &self.state.end_delimiter {
+                                find_subsequence(&raw_current_buffer, end_delimiter).unwrap_or(raw_current_buffer.len())
+                            } else {
+                                raw_current_buffer.len()
+                            }
+                        };
+                        if matches!(operation.clone().unwrap(), Operation::Set){
+                            let buffer = (&raw_current_buffer
+                                [start_deliter_offset + 2..end_deliter_offset])
+                                .to_vec();         
+                            location = String::from_utf8(buffer).unwrap();
+                        } if matches!(operation.clone().unwrap(), Operation::Move) {
+                            println!("will connect buffer");
+                            // file_buffer = (&raw_current_buffer
+                            //     [start_deliter_offset + 4..end_deliter_offset])
+                            //     .to_vec();
+                            let buffer = (&raw_current_buffer
+                                [start_deliter_offset + 4..end_deliter_offset])
+                                .to_vec();
+                            let new_location = "/home/spiderunderurbed/projects/tcp_fs_poc/filesystem_demo.txt";
+                            if file_handle.is_none() {
+                                println!("{:#?}", new_location);
+                                let mut temp_handle = std::fs::OpenOptions::new()
+                                    .append(true)
+                                    .open(&mut *location);
+                                if let Err(_) = temp_handle {
+                                    let _ = std::fs::File::create(new_location);
+                                    temp_handle = std::fs::OpenOptions::new()
+                                        .append(true)
+                                        .open(new_location);
+                                }
+                                file_handle = Some(temp_handle.unwrap());
+                            }
+                            println!("writing to");
+                            let mut local_handle = file_handle.take().unwrap();
+                            let _ = local_handle.write_all(&buffer);
+                            if matches!(continues.clone().unwrap(), ChunkingStatus::Continues) {
+                                file_handle = Some(local_handle);
+                            } else {
+                                let _ = local_handle.flush();
+                            }
+                        }
+                        raw_current_buffer.clear();
                     }
                     Err(e) => match e {
                         broadcast::error::RecvError::Closed => {
-                            println!("closed");
+                            println!("closed")
                         }
                         broadcast::error::RecvError::Lagged(_) => {
                             println!("lagged");
                         }
                     },
                 }
+                // match self.state.rx.recv().await {
+                //     Ok(bytes) => todo!(),
+                //     Err(e) => {
+                //         match e {
+                //             broadcast::error::RecvError::Closed => {
+                //                 println!("closed")
+                //             },
+                //             broadcast::error::RecvError::Lagged(_) => {
+                //                 println!("lagged");
+                //             },
+                //         }
+                //     },
+                // }
             }
             Ok(())
         })
     }
+}
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
 }
 fn log_head_tail(bytes: &[u8]) {
     let n = bytes.len();
@@ -641,35 +620,47 @@ impl RemoteFileSystem<TcpFsSender> {
                                             // the capacity of the max size this buffer could be
                                             let mut temp_buf: Vec<u8> = Vec::with_capacity(4096);
 
-                                            let chunks: Vec<&[u8]> = bytes.chunks(1000).collect();
+                                            let chunks: Vec<&[u8]> = bytes.chunks(4076).collect();
                                             let chunks_length = chunks.len();
                                             for (i, chunk) in chunks.into_iter().enumerate() {
+                                                let mut temp_buf: Vec<u8> =
+                                                    Vec::with_capacity(4096);
                                                 if let Some(start_delims) =
                                                     &self.state.start_delimiter
                                                 {
-                                                    //delimiter_offset = start_delims.len();
                                                     temp_buf.extend(start_delims);
                                                 }
                                                 temp_buf.push(direction_header);
                                                 temp_buf.push(operation_header);
                                                 temp_buf.push(codec_header);
-                                                if chunks_length == i {
-                                                    temp_buf.push(1);
+                                                temp_buf.push(if i == chunks_length - 1 {
+                                                    1
                                                 } else {
-                                                    temp_buf.push(0);
-                                                }
+                                                    0
+                                                });
                                                 temp_buf.extend_from_slice(chunk);
                                                 if let Some(end_delims) = &self.state.end_delimiter
                                                 {
                                                     temp_buf.extend(end_delims);
                                                 }
+                                                self.state.send(temp_buf).await;
                                             }
-                                            self.state.send(temp_buf).await;
-
+                                            // self.state.send(temp_buf).await;
+                                            file.content_stream = Some(file_content_stream);
                                         }
-                                        _ => {}
+                                        Err(e) => match e {
+                                            broadcast::error::RecvError::Closed => {
+                                                println!("Closed here");
+                                                file.content_stream = Some(file_content_stream);
+                                                break;
+                                            }
+                                            broadcast::error::RecvError::Lagged(e) => {
+                                                file.content_stream = Some(file_content_stream);
+                                                println!("lagged: {:#?}", e);
+                                            }
+                                        },
                                     }
-                                    file.content_stream = Some(file_content_stream);
+                                    //file.content_stream = Some(file_content_stream);
                                 }
                             }
                             _ => return Err("unimplimented".into()),
@@ -731,7 +722,6 @@ impl RemoteFileSystem<TcpFsSender> {
 pub trait FsType: Clone + Send + Sync {}
 impl FsType for TcpFsSender {}
 impl FsType for TcpFsReceiver {}
-
 
 // temp_buf.push(direction_header);
 // temp_buf.push(operation_header);
