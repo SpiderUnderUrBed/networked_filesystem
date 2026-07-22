@@ -326,11 +326,9 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                     if let Some(start_delimiter) = &self.state.start_delimiter {
                                         deliter_offset = start_delimiter.len();
                                         if !collecting_buffer {
-                                            // check B0 against delimiter[0] directly — don't discard it
                                             if byte != start_delimiter[0] {
                                                 break 'start_delim;
                                             }
-                                            // now consume+check the REMAINING delimiter bytes (index 1..len)
                                             for delimiter_byte in start_delimiter.iter().skip(1) {
                                                 match bytes_iter.next() {
                                                     Some(future_byte)
@@ -340,8 +338,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                                 }
                                             }
                                             collecting_buffer = true;
-                                            continue 'end; // <-- IMPORTANT: go pull a FRESH byte for direction,
-                                            //     don't fall through using the stale `byte`
+                                            continue 'end; 
                                         }
                                     } else {
                                         collecting_buffer = true;
