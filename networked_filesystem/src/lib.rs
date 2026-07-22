@@ -531,7 +531,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                             }
                                             Operation::Ls => {
                                                 location
-                                                    .push(char::from(bytes));
+                                                    .push(char::from(byte));
                                             }
                                             Operation::None => todo!(),
                                         }
