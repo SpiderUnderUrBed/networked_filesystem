@@ -9,7 +9,8 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::Receiver,
     },
-    task::{Context, Poll}, vec,
+    task::{Context, Poll},
+    vec,
 };
 
 use multer::bytes::buf;
@@ -101,8 +102,8 @@ pub enum ChunkingStatus {
 impl ChunkingStatus {
     fn to_byte_header(&self) -> u8 {
         match self {
-            ChunkingStatus::Continues => 1,
-            ChunkingStatus::End => 0,
+            ChunkingStatus::Continues => 0,
+            ChunkingStatus::End => 1,
         }
     }
     fn from_byte_header(byte: u8) -> Option<ChunkingStatus> {
@@ -228,6 +229,7 @@ pub struct RemoteFileSystem<S> {
     operation: Operation,
     codec: Codec,
     files: Vec<File>,
+    in_operation: bool,
 }
 impl<S: Default> Default for RemoteFileSystem<S> {
     fn default() -> Self {
@@ -238,6 +240,7 @@ impl<S: Default> Default for RemoteFileSystem<S> {
             operation: Operation::None,
             codec: Codec::Unknown,
             files: Vec::new(),
+            in_operation: false,
         }
     }
 }
@@ -286,7 +289,8 @@ impl RemoteFileSystem<TcpFsReceiver> {
         Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
     > {
         Box::pin(async move {
-            loop {
+            //let mut in_operation = false;
+            'file_operation: loop {
                 match self.state.rx.recv().await {
                     Ok(bytes) => {
                         // I push one new byte to the start of the array
@@ -322,35 +326,24 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                     if let Some(start_delimiter) = &self.state.start_delimiter {
                                         deliter_offset = start_delimiter.len();
                                         if !collecting_buffer {
-                                            // Go through the starting delimiter bytes and see if
-                                            // a matching pattern has been detected
-                                            // if no breaks occur then it
-                                            // will start collecting the buffer
-                                            for (i, delimiter_byte) in
-                                                start_delimiter.iter().enumerate()
-                                            {
-                                                // look ahead for the specific starting delimiter byte
-                                                if let Some(future_byte) = bytes_iter.peek_nth(i) {
-                                                    if future_byte != delimiter_byte {
-                                                        // the next byte does not match with the delimiter byte, go to
-                                                        // next loop
-                                                        break 'start_delim;
-                                                    }
-                                                } else {
-                                                    // there is nothing more to check for when looking for a starting delimiter
-                                                    // just end it here
-                                                    break 'end;
+                                            // check B0 against delimiter[0] directly — don't discard it
+                                            if byte != start_delimiter[0] {
+                                                break 'start_delim;
+                                            }
+                                            // now consume+check the REMAINING delimiter bytes (index 1..len)
+                                            for delimiter_byte in start_delimiter.iter().skip(1) {
+                                                match bytes_iter.next() {
+                                                    Some(future_byte)
+                                                        if future_byte == *delimiter_byte => {}
+                                                    Some(_) => break 'start_delim,
+                                                    None => break 'end,
                                                 }
                                             }
+                                            collecting_buffer = true;
+                                            continue 'end; // <-- IMPORTANT: go pull a FRESH byte for direction,
+                                            //     don't fall through using the stale `byte`
                                         }
-                                        // Nothing broke back to the loop
-                                        // therfore the starting delimiter
-                                        // pattern has been found next
-                                        // start collecting the buffer
-                                        collecting_buffer = true;
                                     } else {
-                                        // The user did not set a starting delimiter, immediately try to collect from
-                                        // the buffer
                                         collecting_buffer = true;
                                     }
                                     // start collecting the buffer
@@ -434,106 +427,115 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                         }
 
                                         // Looks ahead to see past the delimiter
-                                        if let Some(byte) = bytes_iter.peek_nth(deliter_offset) {
-                                            // Ensures direction is set
+                                        // for _ in 0..deliter_offset {
+                                        //     bytes_iter.next();
+                                        // }
+                                        //if let Some(byte) = bytes_iter.peek_nth(deliter_offset) {
+                                        // Ensures direction is set
+                                        if direction.is_none() {
+                                            direction = Direction::from_byte_header(byte);
                                             if direction.is_none() {
-                                                direction = Direction::from_byte_header(*byte);
-                                                if direction.is_none() {
-                                                    println!("no direction");
-                                                    return Err(
-                                                        "invalid, no direction was processed"
-                                                            .into(),
-                                                    );
-                                                }
-                                                break 'start_delim;
+                                                println!("no direction");
+                                                return Err(
+                                                    "invalid, no direction was processed".into()
+                                                );
                                             }
-                                            // Ensures an operation was set
+                                            break 'start_delim;
+                                        }
+                                        // Ensures an operation was set
+                                        if operation.is_none() {
+                                            operation = Operation::from_byte_header(byte);
                                             if operation.is_none() {
-                                                operation = Operation::from_byte_header(*byte);
-                                                if operation.is_none() {
-                                                    println!("no operation");
-                                                    return Err(
-                                                        "invalid, no operation was processed"
-                                                            .into(),
-                                                    );
-                                                }
-                                                if matches!(
-                                                    operation.clone().unwrap(),
-                                                    Operation::Set
-                                                ) || matches!(
+                                                println!("no operation");
+                                                return Err(
+                                                    "invalid, no operation was processed".into()
+                                                );
+                                            }
+                                            if matches!(operation.clone().unwrap(), Operation::Set)
+                                                || matches!(
                                                     operation.clone().unwrap(),
                                                     Operation::Ls
-                                                ) {
-                                                    location.clear();
-                                                }
-                                                break 'start_delim;
+                                                )
+                                            {
+                                                location.clear();
                                             }
-                                            match operation.clone().unwrap() {
-                                                Operation::Move => {
+                                            break 'start_delim;
+                                        }
+                                        match operation.clone().unwrap() {
+                                            Operation::Move => {
+                                                if codec.is_none() {
+                                                    codec = Codec::from_byte_header(byte);
                                                     if codec.is_none() {
-                                                        codec = Codec::from_byte_header(*byte);
-                                                        if codec.is_none() {
-                                                            return Err(
-                                                                "invalid, no codec was processed"
-                                                                    .into(),
-                                                            );
-                                                        }
-                                                        break 'start_delim;
-                                                    }
-
-                                                    if continues.clone().is_none() {
-                                                        continues =
-                                                            ChunkingStatus::from_byte_header(*byte);
-                                                        println!(
-                                                            "this is continues: {:#?}",
-                                                            continues
+                                                        return Err(
+                                                            "invalid, no codec was processed"
+                                                                .into(),
                                                         );
-                                                        if continues.is_none() {
-                                                            return Err("invalid, no continuation was processed".into());
-                                                        }
-                                                        break 'start_delim;
                                                     }
-                                                    let new_location = "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt";
+                                                    break 'start_delim;
+                                                }
+
+                                                if continues.clone().is_none() {
+                                                    continues =
+                                                        ChunkingStatus::from_byte_header(byte);
+                                                    println!("this is continues: {:#?}", continues);
+                                                    if continues.is_none() {
+                                                        return Err("invalid, no continuation was processed".into());
+                                                    }
+                                                    break 'start_delim;
+                                                }
+                                                let new_location = "/home/spiderunderurbed/projects/tcp_fs_poc/output.jar";
+                                                if !self.in_operation {
                                                     if file_handle.is_none() {
                                                         println!("{:?}", location);
                                                         let mut temp_handle =
                                                             std::fs::OpenOptions::new()
-                                                                .append(true)
+                                                                .append(false)
                                                                 .open(new_location);
-                                                                //.open(&mut *location);
+                                                        //.open(&mut *location);
                                                         if let Err(_) = temp_handle {
                                                             let _ = std::fs::File::create(
                                                                 //&mut *location,
-                                                                new_location
+                                                                new_location,
                                                             );
                                                             temp_handle =
                                                                 std::fs::OpenOptions::new()
                                                                     .append(true)
                                                                     .open(new_location)
-                                                                    //.open(&mut *location);
+                                                            //.open(&mut *location);
                                                         }
                                                         file_handle = Some(temp_handle.unwrap());
                                                     }
-                                                    let mut local_handle =
-                                                        file_handle.take().unwrap();
-                                                    let _ = local_handle.write_all(&[*byte]);
-                                                    if matches!(
-                                                        continues.clone().unwrap(),
-                                                        ChunkingStatus::Continues
-                                                    ) {
-                                                        file_handle = Some(local_handle);
-                                                    }
-                                                    // location.clear();
+                                                    self.in_operation = true;
+                                                } else {
+                                                    let temp_handle = std::fs::OpenOptions::new()
+                                                        .append(true)
+                                                        .open(new_location);
+                                                    file_handle = Some(temp_handle.unwrap());
                                                 }
-                                                Operation::Set => {
-                                                    location.push(char::from(*byte));
+                                                let mut local_handle = file_handle.take().unwrap();
+                                                let _ = local_handle.write_all(&[byte]);
+                                                if matches!(
+                                                    continues.clone().unwrap(),
+                                                    ChunkingStatus::Continues
+                                                ) {
+                                                    file_handle = Some(local_handle);
+                                                } else {
+                                                    self.in_operation = false;
+                                                    break 'file_operation;
                                                 }
-                                                Operation::Ls => {
-                                                    location.push(char::from(*byte));
-                                                }
-                                                Operation::None => todo!(),
+                                                // location.clear();
                                             }
+                                            Operation::Set => {
+                                                location
+                                                    .push(char::from(byte));
+                                            }
+                                            Operation::Ls => {
+                                                location
+                                                    .push(char::from(bytes));
+                                            }
+                                            Operation::None => todo!(),
                                         }
+                                        //}
                                     }
                                 }
                             }
@@ -576,6 +578,7 @@ impl RemoteFileSystem<TcpFsSender> {
             operation: Operation::None,
             codec: Codec::Unknown,
             files: Vec::new(),
+            in_operation: false,
         }
     }
     pub fn inner_mut(&mut self) -> &mut TcpFsSender {
@@ -634,7 +637,7 @@ impl RemoteFileSystem<TcpFsSender> {
                                 let operation_header = self.operation.to_byte_header().unwrap();
                                 let codec_header = self.codec.to_byte_header().unwrap();
 
-                                let mut previous_buf: Vec<u8> =  Vec::with_capacity(4096);
+                                let mut previous_buf: Vec<u8> = Vec::with_capacity(4096);
                                 //let mut delimiter_offset = 0;
 
                                 loop {
@@ -654,7 +657,8 @@ impl RemoteFileSystem<TcpFsSender> {
 
                                             // TODO: consider if i need to fill and therfore allocate
                                             // the capacity of the max size this buffer could be
-                                            let chunks: Vec<&[u8]> = previous_buf.chunks(1000).collect();
+                                            let chunks: Vec<&[u8]> =
+                                                previous_buf.chunks(1000).collect();
                                             let chunks_length = chunks.len();
                                             for (i, chunk) in chunks.into_iter().enumerate() {
                                                 if let Some(start_delims) =
@@ -678,13 +682,14 @@ impl RemoteFileSystem<TcpFsSender> {
                                                 }
                                             }
                                             self.state.send(temp_buf).await;
-
+                                            previous_buf = vec![];
                                         }
                                         Err(e) => {
                                             match e {
                                                 broadcast::error::RecvError::Closed => {
                                                     // println!("closing");
-                                                    let mut temp_buf: Vec<u8> = Vec::with_capacity(4096);
+                                                    let mut temp_buf: Vec<u8> =
+                                                        Vec::with_capacity(4096);
                                                     if let Some(start_delims) =
                                                         &self.state.start_delimiter
                                                     {
@@ -696,17 +701,16 @@ impl RemoteFileSystem<TcpFsSender> {
                                                     temp_buf.push(codec_header);
                                                     temp_buf.push(1);
                                                     temp_buf.extend(previous_buf.clone());
-                                                    if let Some(end_delims) = &self.state.end_delimiter
+                                                    if let Some(end_delims) =
+                                                        &self.state.end_delimiter
                                                     {
                                                         temp_buf.extend(end_delims);
                                                     }
                                                     println!("{:#?}", temp_buf.len());
                                                     self.state.send(temp_buf.clone()).await;
                                                     break;
-                                                },
-                                                broadcast::error::RecvError::Lagged(_) => {
-
-                                                },
+                                                }
+                                                broadcast::error::RecvError::Lagged(_) => {}
                                             }
                                         }
                                     }
@@ -772,7 +776,6 @@ impl RemoteFileSystem<TcpFsSender> {
 pub trait FsType: Clone + Send + Sync {}
 impl FsType for TcpFsSender {}
 impl FsType for TcpFsReceiver {}
-
 
 // temp_buf.push(direction_header);
 // temp_buf.push(operation_header);
