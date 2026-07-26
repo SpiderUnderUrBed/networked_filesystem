@@ -1,8 +1,5 @@
 use std::{
-    fs::File as StdFile,
-    io::{BufReader, Read},
-    path::Path,
-    sync::{Arc, atomic::AtomicBool},
+    fs::File as StdFile, io::{BufReader, Read}, path::Path, sync::{Arc, atomic::AtomicBool}, thread, time::Duration,
 };
 
 use tokio::{
@@ -67,8 +64,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     let mut tcp_fs = TcpFsSender::new(rx.clone(), tx.clone());
-    tcp_fs.set_start_delimiter(r"\\f".as_bytes().to_vec());
-    tcp_fs.set_end_delimiter("//f".as_bytes().to_vec());
+    tcp_fs.set_start_delimiter(r"\\\\f".as_bytes().to_vec());
+    tcp_fs.set_end_delimiter("////f".as_bytes().to_vec());
     let mut filesystem = RemoteFileSystem::<TcpFsSender>::new(tcp_fs);
     filesystem.set_direction(Direction::Local);
     filesystem.set_codec(Codec::RawContinues);
@@ -115,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             //let file_path = Path::new("/home/spiderunderurbed/projects/tcp_fs_poc/test.txt");
             let file_path = Path::new(
-                "/home/spiderunderurbed/projects/tcp_fs_poc/forge-1.20.6-50.1.0-installer.jar",
+                "/home/spiderunderurbed/projects/tcp_fs_poc/archives/forge-1.20.6-50.1.0-installer.jar",
             );
             //forge-1.20.6-50.1.0-installer.jar
             // let file = StdFile::open(file_path)?;
@@ -143,13 +140,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     break;
                 }
                 tx.send(chunk[..n].to_vec())?;
+                //thread::sleep(Duration::from_millis(2)); 
             }
 
-            // let payload: String = (0..=10000).map(|i| format!("{} ", i)).collect();
+            // let payload: String = (0..=100000).map(|i| format!("{} ", i)).collect();
             // let bytes = payload.as_bytes();
             // tx.send(bytes.to_vec())?;
             println!("going to drop tx");
-            drop(tx);
+            // drop(tx);
             if let Err(e) = handle.await {
                 eprintln!("task panicked: {e:?}");
             }

@@ -1,14 +1,15 @@
 use multipeek::{IteratorExt, MultiPeek};
 
-// TODO: see if I could for the subsequence matching 
+// TODO: see if I could for the subsequence matching
 // handle partial matches at the end of the iterator, signify that and start a remainder
-// waiting for the next amount of bytes from a read 
+// waiting for the next amount of bytes from a read
+// useful with Multipeek potentially for look aheads
 
 pub enum SubsequenceStatus {
     Pending,
     NotMatched,
     Continue,
-    FoundAt(usize)
+    FoundAt(usize),
 }
 pub fn find_subsequence_bytes_full(
     delimiter: Vec<u8>,
@@ -32,21 +33,21 @@ pub fn find_subsequence_bytes_full(
     }
 }
 
+// TODO:?
+// make it so it will return a pos at continue, it will 100% update starting_offset to it, depending on the situation it will consume the next byte, and continue the loop
 pub fn find_subsequence_by_windows_iter(
     delimiter_iter: std::slice::Iter<u8>,
     iter: MultiPeek<std::vec::IntoIter<u8>>,
 ) -> SubsequenceStatus {
     let remaining_delimiter: Vec<u8> = delimiter_iter.copied().collect();
     let remaining_bytes = iter.collect::<Vec<u8>>();
-    match remaining_bytes.windows(remaining_delimiter.len()).position(|window| window == remaining_delimiter){
-        Some(pos) => {
-            SubsequenceStatus::FoundAt(pos)
-        },
-        None => {
-            SubsequenceStatus::NotMatched
-        },
+    match remaining_bytes
+        .windows(remaining_delimiter.len())
+        .position(|window| window == remaining_delimiter)
+    {
+        Some(pos) => SubsequenceStatus::FoundAt(pos),
+        None => SubsequenceStatus::NotMatched,
     }
-    
 }
 pub fn find_subsequence_bytes_iter(
     mut delimiter_iter: std::slice::Iter<u8>,
@@ -77,14 +78,14 @@ pub fn find_subsequence_bytes_full_v1(
     let mut final_pos = 0;
     'subsequence_match: loop {
         for (i, expected) in delimiter.iter().enumerate() {
-            if let Some(future_byte) = bytes_iter.peek_nth(i){
+            if let Some(future_byte) = bytes_iter.peek_nth(i) {
                 if future_byte != expected {
                     bytes_iter.next();
                     final_pos += 1;
                     continue 'subsequence_match;
                 }
             } else {
-                return Err(SubsequenceStatus::NotMatched)
+                return Err(SubsequenceStatus::NotMatched);
             }
         }
         return Ok(final_pos);

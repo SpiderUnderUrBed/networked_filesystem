@@ -14,19 +14,16 @@ struct PingRequest {}
 struct AppState {
     filesystem: Arc<RwLock<RemoteFileSystem<TcpFsReceiver>>>,
 }
-
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     println!("Hello, world!");
     let listener = TcpListener::bind("127.0.0.1:8011").await?;
     loop {
         let (stream, addr) = listener.accept().await?;
-        //let (rx, tx) = broadcast::channel::<Vec<u8>>(32);
-        // let (reader, writer) = listener
-        let (fs_tx, mut fs_rx) = flume::bounded(32);
-        let mut receiver = TcpFsReceiver::new(fs_tx.clone(), fs_rx.clone());
-        receiver.set_start_delimiter(r"\\f".as_bytes().to_vec());
-        receiver.set_end_delimiter("//f".as_bytes().to_vec());
+        let (fs_tx, fs_rx) = flume::bounded(32);
+        let mut receiver = TcpFsReceiver::new(fs_tx.clone(), fs_rx);
+        receiver.set_start_delimiter(r"\\\\f".as_bytes().to_vec());
+        receiver.set_end_delimiter("////f".as_bytes().to_vec());
         let mut filesystem = RemoteFileSystem::<TcpFsReceiver>::new(receiver);
         filesystem.set_direction(Direction::Server);
         filesystem.create_state(
@@ -39,8 +36,7 @@ async fn main() -> std::io::Result<()> {
         let state = AppState {
             filesystem: arc_filesystem.clone(),
         };
-        let (tx, mut rx) = flume::bounded::<Vec<u8>>(32);
-        //let (tx_clone, rx_clone)
+        let (reply_tx, mut reply_rx) = flume::bounded::<Vec<u8>>(32);
 
         tokio::spawn(async move {
             let (mut read_half, mut write_half) = stream.into_split();
@@ -50,14 +46,7 @@ async fn main() -> std::io::Result<()> {
             let mut filesystem_for_read_task = arc_filesystem.write().await;
             loop {
                 tokio::select! {
-                    Ok(out) = rx.recv_async() => {
-                        println!("writing back");
-                        // if let Err(e) = write_half.write_all(&out).await {
-                        //     eprintln!("write error: {e}");
-                        //     break;
-                        // }
-                    }
-                    Ok(out) = fs_rx.recv_async() => {
+                    Ok(out) = reply_rx.recv_async() => {
                         println!("writing back");
                         if let Err(e) = write_half.write_all(&out).await {
                             eprintln!("write error: {e}");
@@ -75,7 +64,6 @@ async fn main() -> std::io::Result<()> {
                                 println!("read {} bytes: {:?}", n, data);
 
                                 filesystem_for_read_task.inner_mut().send(data.to_vec());
-
                             }
                             Err(e) => {
                                 eprintln!("read error: {e}");
