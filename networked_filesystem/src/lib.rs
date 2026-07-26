@@ -671,7 +671,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
 
         //let mut remainder: Vec<u8> = Vec::new();
         //let mut all_frames: VecDeque<FrameEncoder> = VecDeque::new();
-        let mut processed_frame_size = 0;
+        //let mut processed_frame_size = 0;
         loop {
             match self.state.get_chunk().await {
                 Ok(bytes) => {
@@ -691,7 +691,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
                             }
                             for (i, frame) in frames.iter().enumerate() {
                                 println!("frame {}: {:?}", i, frame.file_chunks);
-                                processed_frame_size += frame.file_chunks.len();
+                                //processed_frame_size += frame.file_chunks.len();
                                 if let Some(mut handle) = file_handle.take() {
                                     println!("writing to handle");
                                     let chunks = &frame.file_chunks[4..frame.file_chunks.len()];
@@ -719,8 +719,8 @@ impl RemoteFileSystem<TcpFsReceiver> {
                                 println!("non-beginning frame {:?}", total_bytes);
                             }
                             FileFrameStatus::FrameNoEnds => {
-                                let remainder =
-                                    &total_bytes[processed_frame_size..total_bytes.len()];
+                                let remainder = total_bytes;
+                                    // &total_bytes[processed_frame_size..total_bytes.len()];
                                 self.remainder = remainder.to_vec();
                                 println!("this frame does not end");
                             }
@@ -737,7 +737,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
                     //println!("got a flume error");
                 }
             }
-            processed_frame_size = 0;
+            //processed_frame_size = 0;
         }
         //})
     }
