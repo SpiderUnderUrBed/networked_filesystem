@@ -23,8 +23,8 @@ async fn main() -> std::io::Result<()> {
         let (stream, addr) = listener.accept().await?;
         //let (rx, tx) = broadcast::channel::<Vec<u8>>(32);
         // let (reader, writer) = listener
-        let (fs_tx, mut fs_rx) = broadcast::channel::<Vec<u8>>(32);
-        let mut receiver = TcpFsReceiver::new(fs_tx.clone(), fs_rx.resubscribe());
+        let (fs_tx, mut fs_rx) = flume::bounded(32);
+        let mut receiver = TcpFsReceiver::new(fs_tx.clone(), fs_rx.clone());
         receiver.set_start_delimiter(r"\\f".as_bytes().to_vec());
         receiver.set_end_delimiter("//f".as_bytes().to_vec());
         let mut filesystem = RemoteFileSystem::<TcpFsReceiver>::new(receiver);
@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
         let state = AppState {
             filesystem: arc_filesystem.clone(),
         };
-        let (tx, mut rx) = broadcast::channel::<Vec<u8>>(32);
+        let (tx, mut rx) = flume::bounded::<Vec<u8>>(32);
         //let (tx_clone, rx_clone)
 
         tokio::spawn(async move {
@@ -50,14 +50,14 @@ async fn main() -> std::io::Result<()> {
             let mut filesystem_for_read_task = arc_filesystem.write().await;
             loop {
                 tokio::select! {
-                    Ok(out) = rx.recv() => {
-                        //println!("writing back");
+                    Ok(out) = rx.recv_async() => {
+                        println!("writing back");
                         // if let Err(e) = write_half.write_all(&out).await {
                         //     eprintln!("write error: {e}");
                         //     break;
                         // }
                     }
-                    Ok(out) = fs_rx.recv() => {
+                    Ok(out) = fs_rx.recv_async() => {
                         println!("writing back");
                         if let Err(e) = write_half.write_all(&out).await {
                             eprintln!("write error: {e}");
@@ -72,7 +72,7 @@ async fn main() -> std::io::Result<()> {
                             }
                             Ok(n) => {
                                 let data = &temp_buf[..n];
-                                //println!("read {} bytes: {:?}", n, data);
+                                println!("read {} bytes: {:?}", n, data);
 
                                 filesystem_for_read_task.inner_mut().send(data.to_vec());
 

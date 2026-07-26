@@ -1,4 +1,9 @@
-use std::{fs::File as StdFile, io::{BufReader, Read}, path::Path, sync::{Arc, atomic::AtomicBool}};
+use std::{
+    fs::File as StdFile,
+    io::{BufReader, Read},
+    path::Path,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -20,9 +25,9 @@ struct AppState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Welcome to the networked filesystem POC!");
-    let (tx, mut rx) = broadcast::channel::<Vec<u8>>(32);
+    let (tx, mut rx) = flume::bounded::<Vec<u8>>(32);
 
-    let (tx_clone, mut rx_clone) = (tx.clone(), rx.resubscribe());
+    let (tx_clone, mut rx_clone) = (tx.clone(), rx.clone());
     tokio::spawn(async move {
         //let listener = TcpListener::bind("127.0.0.1:80")?;
         let mut stream = TcpStream::connect("127.0.0.1:8011").await.unwrap();
@@ -32,7 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut accum: Vec<u8> = Vec::new();
         loop {
             tokio::select! {
-                Ok(out) = rx_clone.recv() => {
+                Ok(out) = rx_clone.recv_async() => {
+                    println!("out bytes: {:?}", out);
                     if let Err(e) = write_half.write_all(&out).await {
                         eprintln!("write error: {e}");
                         break;
@@ -46,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         }
                         Ok(n) => {
                             let data = &temp_buf[..n];
-                           // println!("read {} bytes: {:?}", n, data);
+                        //    println!("read {} bytes: {:?}", n, data);
 
                         }
                         Err(e) => {
@@ -60,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    let mut tcp_fs = TcpFsSender::new(rx.resubscribe(), tx.clone());
+    let mut tcp_fs = TcpFsSender::new(rx.clone(), tx.clone());
     tcp_fs.set_start_delimiter(r"\\f".as_bytes().to_vec());
     tcp_fs.set_end_delimiter("//f".as_bytes().to_vec());
     let mut filesystem = RemoteFileSystem::<TcpFsSender>::new(tcp_fs);
@@ -73,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     loop {
         let operation: String = input!("Enter an operation: ").parse().unwrap();
-        let (tx, rx) = broadcast::channel::<Vec<u8>>(32);
+        let (tx, rx) = flume::bounded::<Vec<u8>>(32);
         let arc_state = state.clone();
         if operation.starts_with("send") {
             {
@@ -85,8 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     "main".to_string(),
                     LocalState {
                         // TODO: set back to /
-                        location: "/"
-                            .to_string(),
+                        location: "/".to_string(),
                     },
                 );
 
@@ -95,9 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 filesystem.clear_files();
                 let file = File {
                     original_location: None,
-                    final_location:
-                        "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt".to_owned(),
-                    content_stream: Some(rx.resubscribe()),
+                    final_location: "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt"
+                        .to_owned(),
+                    content_stream: Some(rx.clone()),
                 };
                 filesystem.append_files(file);
             }
@@ -108,7 +113,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let _ = filesystem.execute_operation("main".to_string()).await;
             });
 
-            let file_path = Path::new("/home/spiderunderurbed/projects/tcp_fs_poc/test.txt");
+            //let file_path = Path::new("/home/spiderunderurbed/projects/tcp_fs_poc/test.txt");
+            let file_path = Path::new(
+                "/home/spiderunderurbed/projects/tcp_fs_poc/forge-1.20.6-50.1.0-installer.jar",
+            );
+            //forge-1.20.6-50.1.0-installer.jar
             // let file = StdFile::open(file_path)?;
             // let reader = BufReader::new(file);
 
@@ -167,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let mut filesystem = state.filesystem.write().await;
                 let _ = filesystem.execute_operation("main".to_string()).await;
             });
-            drop(tx);
+            //drop(tx);
             //tx_option = None;
             if let Err(e) = handle.await {
                 eprintln!("task panicked: {e:?}");
