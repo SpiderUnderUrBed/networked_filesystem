@@ -310,18 +310,13 @@ impl FrameEncoder {
                                         .to_vec();
                                 } else {
                                     println!("throwing an error and cant return the subframe");
-                                    
-                                    //return Ok(subframes);
                                 }
                             }
                         } else {
                             println!("no ending delimiter");
                         }
                         return Err(FileFrameStatus::FrameNoEnds)
-                        //subframes.push_front(self.clone());
-                        //println!("got errors one level down");
                     }
-                    //return Err(FileFrameStatus::FrameNoEnds)
                     return Ok(subframes);
                     //}
                 }
@@ -350,9 +345,6 @@ impl EncodeWithDelims for FileFrame {
         ending_delimiter: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, FileFrameStatus> {
         let mut bytes_frame = Vec::new();
-        // if let Some(ref starting_delimiter) = self.starting_delimiter {
-        //     bytes_frame.extend(starting_delimiter);
-        // }
         if let Some(ref direction) = self.direction {
             bytes_frame.push(direction.clone() as u8);
         } else {
@@ -375,30 +367,16 @@ impl EncodeWithDelims for FileFrame {
         }
         let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
         bytes_frame = encoder.encode_bytes(bytes_frame, self.file_chunks.clone());
-        //if STUFF_BYTES {
 
-        // } else {
-        //     // bytes_frame.extend(self.file_chunks.clone());
-        // }
-        // if let Some(ref ending_delimiter) = self.ending_delimiter {
-        //     println!("adding ending delimiter");
-        //     //println!("Adding the end delimiter");
-        //     bytes_frame.extend(ending_delimiter);
-        // }
         Ok(bytes_frame)
     }
 }
 #[derive(Default, Clone)]
 struct FileFrame {
-    // escape_byte: Option<u8>,
-    // starting_delimiter: Option<Vec<u8>>,
-    // ending_delimiter: Option<Vec<u8>>,
-    // starting_position: Option<u8>,
     direction: Option<Direction>,
     operation: Option<Operation>,
     codec: Option<Codec>,
     chunking_status: Option<ChunkingStatus>,
-    // file_chunks: [u8; 4076],
     file_chunks: Vec<u8>,
     remainder: Vec<u8>,
     collect_buffer: bool,
@@ -408,8 +386,7 @@ pub enum FileFrameStatus {
     FrameNoBegins,
     FrameNoEnds,
     NotValidFrame,
-    NoFrameDecoding, // Pending,
-                     // Unknown,
+    NoFrameDecoding, 
 }
 // static STUFF_BYTES: bool = true;
 impl FileFrame {
@@ -423,8 +400,6 @@ impl FileFrame {
         //escape_byte: Option<u8>
     ) -> Self {
         FileFrame {
-            // starting_delimiter,
-            // ending_delimiter,
             direction: Some(direction),
             operation: Some(operation),
             codec: Some(codec),
@@ -433,7 +408,6 @@ impl FileFrame {
             remainder: Vec::new(),
             collect_buffer: true,
             complete_frame: false,
-            //escape_byte,
         }
     }
     fn decode(&self, bytes: Vec<u8>) -> Result<(), FileFrameStatus> {
@@ -593,7 +567,7 @@ pub struct RemoteFileSystem<S> {
     operation: Operation,
     codec: Codec,
     files: Vec<File>,
-    remainder: Vec<u8>, // task: Mutex<()>, //in_operation: bool,
+    remainder: Vec<u8>, 
 }
 impl<S: Default> Default for RemoteFileSystem<S> {
     fn default() -> Self {
@@ -604,8 +578,7 @@ impl<S: Default> Default for RemoteFileSystem<S> {
             operation: Operation::None,
             codec: Codec::Unknown,
             files: Vec::new(),
-            remainder: Vec::new(), //task: Mutex::new(()),
-                                   //in_operation: false,
+            remainder: Vec::new(), 
         }
     }
 }
@@ -648,30 +621,19 @@ impl RemoteFileSystem<TcpFsReceiver> {
         }
     }
     pub async fn receive_operation(&mut self, fs_state_name: String) {
-        println!("re receiving");
-        //Box::pin(async move {
-        // let mut frame = FileFrame::default();
-        // frame.starting_delimiter = self.state.start_delimiter.clone();
-        // frame.ending_delimiter = self.state.end_delimiter.clone();
         println!("receiving in here");
         let new_location = "/home/spiderunderurbed/projects/tcp_fs_poc/output.jar";
         let mut file_handle: Option<std::fs::File> = None;
 
         let mut temp_handle = std::fs::OpenOptions::new().append(true).open(new_location);
-        //.open(&mut *location);
         if let Err(_) = temp_handle {
             let _ = std::fs::File::create(
-                //&mut *location,
                 new_location,
             );
             temp_handle = std::fs::OpenOptions::new().append(true).open(new_location)
-            //.open(&mut *location);
         }
         file_handle = Some(temp_handle.unwrap());
 
-        //let mut remainder: Vec<u8> = Vec::new();
-        //let mut all_frames: VecDeque<FrameEncoder> = VecDeque::new();
-        //let mut processed_frame_size = 0;
         loop {
             match self.state.get_chunk().await {
                 Ok(bytes) => {
@@ -686,28 +648,22 @@ impl RemoteFileSystem<TcpFsReceiver> {
                     frame.ending_delimiter = self.state.end_delimiter.clone();
                     match frame.recursively_handle_bytes(&total_bytes) {
                         Ok(frames) => {
-                            if frames.len() == 0 {
-                                self.remainder = total_bytes;
-                            }
+                            // if frames.len() == 0 {
+                            //     self.remainder = total_bytes;
+                            // }
                             for (i, frame) in frames.iter().enumerate() {
                                 println!("frame {}: {:?}", i, frame.file_chunks);
-                                //processed_frame_size += frame.file_chunks.len();
                                 if let Some(mut handle) = file_handle.take() {
-                                    println!("writing to handle");
                                     let chunks = &frame.file_chunks[4..frame.file_chunks.len()];
                                     let res = handle.write_all(chunks);
-                                    println!("file res {:#?}", res);
                                     let res = handle.flush();
-                                    println!("file res {:#?}", res);
                                     let res = handle.sync_all();
-                                    println!("file res {:#?}", res);
                                     file_handle = Some(handle);
                                 } else {
                                     println!("do not have handle");
                                 }
                             }
                             if let Some(last_frame) = frames.iter().last() {
-                                //remainder = last_frame.remainder.clone();
                                 self.remainder.extend(last_frame.remainder.clone());
                             }
                         }
