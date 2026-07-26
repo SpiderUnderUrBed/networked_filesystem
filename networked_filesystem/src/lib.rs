@@ -317,7 +317,6 @@ impl FrameEncoder {
                         } else {
                             println!("no ending delimiter");
                         }
-                        return Err(FileFrameStatus::FrameNoEnds)
                         //subframes.push_front(self.clone());
                         //println!("got errors one level down");
                     }
@@ -451,7 +450,6 @@ impl FileFrame {
     //&mut
 }
 
-#[derive(Debug)]
 pub enum FileStreamError {
     Disconnect,
 }
@@ -686,9 +684,6 @@ impl RemoteFileSystem<TcpFsReceiver> {
                     frame.ending_delimiter = self.state.end_delimiter.clone();
                     match frame.recursively_handle_bytes(&total_bytes) {
                         Ok(frames) => {
-                            if frames.len() == 0 {
-                                self.remainder = total_bytes;
-                            }
                             for (i, frame) in frames.iter().enumerate() {
                                 println!("frame {}: {:?}", i, frame.file_chunks);
                                 processed_frame_size += frame.file_chunks.len();
@@ -728,7 +723,6 @@ impl RemoteFileSystem<TcpFsReceiver> {
                     }
                 }
                 Err(e) => {
-                    println!("got an error at the end: {:#?}", e);
                     // for (i, frame) in all_frames.iter().enumerate() {
                     //     println!("{}: frame chunks: {:?}", i, frame.file_chunks);
                     //     //println!("{}: frame remainder: {:?}", i, frame.remainder);
