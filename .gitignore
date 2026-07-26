@@ -2,3 +2,8 @@
 filesystem_demo.txt
 .direnv/
 .vscode/
+archives/
+output.jar
+server/tmp.txt
+server/debug.txt
+client/debug.txt
