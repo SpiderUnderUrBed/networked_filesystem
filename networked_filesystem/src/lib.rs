@@ -19,9 +19,10 @@ use multipeek::{IteratorExt, MultiPeek};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::{io::AsyncWriteExt, sync::watch};
+use std::fs::File as StdFile;
 
 use crate::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter};
-//use tokio_util::sync::CancellationToken;
+
 
 mod subsequence;
 
@@ -32,22 +33,7 @@ pub enum Direction {
     Server = 1,
     Unknown = 2,
 }
-// impl Direction {
-//     fn to_byte_header(&self) -> Option<u8> {
-//         match self {
-//             Direction::Local => Some(0),
-//             Direction::Server => Some(1),
-//             Direction::Unknown => None,
-//         }
-//     }
-//     fn from_byte_header(byte: u8) -> Option<Direction> {
-//         match byte {
-//             0 => Some(Direction::Local),
-//             1 => Some(Direction::Server),
-//             _ => None,
-//         }
-//     }
-// }
+
 
 #[derive(Clone, TryFromPrimitive)]
 #[repr(u8)]
@@ -58,24 +44,7 @@ pub enum Operation {
     // LsWithRange { start: u64, end: u64 },
     None = 4,
 }
-// impl Operation {
-//     fn to_byte_header(&self) -> Option<u8> {
-//         match self {
-//             Operation::Move => Some(1),
-//             Operation::None => None,
-//             Operation::Set => Some(2),
-//             Operation::Ls => Some(3),
-//         }
-//     }
-//     fn from_byte_header(byte: u8) -> Option<Operation> {
-//         match byte {
-//             1 => Some(Operation::Move),
-//             2 => Some(Operation::Set),
-//             3 => Some(Operation::Ls),
-//             _ => None,
-//         }
-//     }
-// }
+
 
 #[derive(Clone, TryFromPrimitive)]
 #[repr(u8)]
@@ -85,53 +54,34 @@ pub enum Codec {
     Multipart = 2,
     Unknown = 4,
 }
-// impl Codec {
-//     fn to_byte_header(&self) -> Option<u8> {
-//         match self {
-//             Codec::Raw => Some(0),
-//             Codec::Multipart => Some(1),
-//             Codec::RawContinues => Some(2),
-//             Codec::Unknown => None,
-//         }
-//     }
-//     fn from_byte_header(byte: u8) -> Option<Codec> {
-//         match byte {
-//             0 => Some(Codec::Raw),
-//             1 => Some(Codec::Multipart),
-//             2 => Some(Codec::RawContinues),
-//             _ => None,
-//         }
-//     }
-// }
+
 #[derive(Clone, Debug, TryFromPrimitive)]
 #[repr(u8)]
 pub enum ChunkingStatus {
     Continues = 0,
     End = 1,
 }
-// impl ChunkingStatus {
-//     fn to_byte_header(&self) -> u8 {
-//         match self {
-//             ChunkingStatus::Continues => 0,
-//             ChunkingStatus::End => 1,
-//         }
-//     }
-//     fn from_byte_header(byte: u8) -> Option<ChunkingStatus> {
-//         match byte {
-//             0 => Some(ChunkingStatus::Continues),
-//             1 => Some(ChunkingStatus::End),
-//             _ => None,
-//         }
-//     }
-// }
+
 #[derive(Default, Clone)]
-struct FrameEncoder {
+pub struct FrameEncoder {
     escape_byte: Option<u8>,
     starting_delimiter: Option<Vec<u8>>,
     ending_delimiter: Option<Vec<u8>>,
     file_chunks: Vec<u8>,
     remainder: Vec<u8>,
     collect_buffer: bool,
+}
+pub trait FrameHandler {
+    type FrameOutput;
+    fn append_bytes_recv(
+        &mut self,
+        bytes: &Vec<u8>,
+        _: &mut u64
+    ) -> Result<VecDeque<Self::FrameOutput>, FileFrameStatus>;
+    // fn set_remainder(&mut self, remainder: Vec<u8>);
+    fn set_chunks(&mut self, chunks: Vec<u8>);
+    fn get_remainder(&self) -> Vec<u8>;
+    fn get_chunks(&self) -> Vec<u8>;
 }
 impl FrameEncoder {
     fn new(
@@ -144,7 +94,7 @@ impl FrameEncoder {
             ending_delimiter,
             file_chunks: Vec::new(),
             remainder: Vec::new(),
-            collect_buffer: true,
+            collect_buffer: false,
             escape_byte,
         }
     }
@@ -161,8 +111,6 @@ impl FrameEncoder {
         ) {
             let starting_byte_to_escape = starting_delims.get(0).unwrap();
             let ending_byte_to_escape = ending_delims.get(0).unwrap();
-            // let mut current_byte_iter = self.file_chunks.iter();
-            //while let Some(byte) = current_byte_iter.next()  {
             for (_, byte) in content.iter().enumerate() {
                 if *byte == *starting_byte_to_escape || *byte == *ending_byte_to_escape {
                     bytes_frame.push(escape_byte);
@@ -173,16 +121,20 @@ impl FrameEncoder {
             bytes_frame.extend(content.clone());
         }
         if let Some(ref ending_delimiter) = self.ending_delimiter {
-            println!("adding ending delimiter");
-            //println!("Adding the end delimiter");
             bytes_frame.extend(ending_delimiter);
         }
         bytes_frame
     }
-    fn recursively_handle_bytes(
+
+}
+impl FrameHandler for FrameEncoder {
+    type FrameOutput = Self;
+    fn append_bytes_recv(
         &mut self,
         bytes: &Vec<u8>,
+        _: &mut u64
     ) -> Result<VecDeque<Self>, FileFrameStatus> {
+        // println!("{:#?}, {:#?}, {:#?}", self.escape_byte, self.starting_delimiter, self.ending_delimiter);
         let mut subframes: VecDeque<Self> = VecDeque::new();
         let mut total_bytes = self.remainder.clone();
         total_bytes.extend(bytes.clone());
@@ -205,6 +157,7 @@ impl FrameEncoder {
                     ) {
                         SubsequenceStatus::Pending => {}
                         SubsequenceStatus::NotMatched => {
+                            println!("no ending delims found for {:?}", self.file_chunks.clone());
                             return Err(FileFrameStatus::FrameNoEnds);
                         }
                         SubsequenceStatus::Continue => {
@@ -235,7 +188,7 @@ impl FrameEncoder {
             inner_file_frame.starting_delimiter = self.starting_delimiter.clone();
             inner_file_frame.ending_delimiter = self.ending_delimiter.clone();
             inner_file_frame.escape_byte = self.escape_byte;
-            match inner_file_frame.recursively_handle_bytes(&self.remainder.clone()) {
+            match inner_file_frame.append_bytes_recv(&self.remainder.clone(), &mut 0) {
                 Ok(frames) => {
                     // println!("frames len: {}", frames.len());
                     // if frames.len() > 1 {
@@ -256,7 +209,7 @@ impl FrameEncoder {
         } else {
             if self.starting_delimiter.is_none() {
                 self.collect_buffer = true;
-                return self.recursively_handle_bytes(bytes);
+                return self.append_bytes_recv(bytes, &mut 0);
             } else {
                 let mut starting_offset = 0;
                 let mut bytes_iter = total_bytes.clone().into_iter().multipeek();
@@ -294,7 +247,7 @@ impl FrameEncoder {
                     //inner_file_frame.remainder = self.remainder.clone();
                     inner_file_frame.file_chunks = self.file_chunks.clone();
                     inner_file_frame.collect_buffer = true;
-                    if let Ok(frames) = inner_file_frame.recursively_handle_bytes(&Vec::new()) {
+                    if let Ok(frames) = inner_file_frame.append_bytes_recv(&Vec::new(), &mut 0) {
                         subframes.extend(frames);
                     } else {
                         println!("pushing a subframe {:?}", self.file_chunks);
@@ -324,20 +277,38 @@ impl FrameEncoder {
         }
         //todo!()
     }
+    // fn set_remainder(&mut self, remainder: Vec<u8>){
+    //     self.remainder = remainder;
+    // }
+    fn set_chunks(&mut self, chunks: Vec<u8>){
+        println!("{}", chunks.len());
+        self.remainder = chunks;
+    }
+    fn get_remainder(&self) -> Vec<u8> {
+        self.remainder.clone()
+    }
+    
+    fn get_chunks(&self) -> Vec<u8> {
+        self.file_chunks.clone()
+    }
 }
 
-pub trait EncodeToLength {
+pub trait HandleWithLength {
     fn to_bytes(&self) -> Result<Vec<u8>, FileFrameStatus>;
 }
-pub trait EncodeWithDelims {
+pub trait HandleWithDelims {
+    // type FrameOutput;
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
         starting_delimiter: Option<Vec<u8>>,
         ending_delimiter: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, FileFrameStatus>;
+    //    fn create_frame_handler() -> Self::FrameOutput;
+
 }
-impl EncodeWithDelims for FileFrame {
+impl HandleWithDelims for FileFrame {
+    // type FrameOutput = FrameEncoder;
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
@@ -369,6 +340,41 @@ impl EncodeWithDelims for FileFrame {
         bytes_frame = encoder.encode_bytes(bytes_frame, self.file_chunks.clone());
 
         Ok(bytes_frame)
+    }
+
+}
+
+pub struct WithDelims;
+pub struct WithLength;
+
+pub trait Handle<With> {
+    fn to_bytes(
+        &self,
+        escape_byte: Option<u8>,
+        starting_delimiter: Option<Vec<u8>>,
+        ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus>;
+}
+
+impl<T: HandleWithDelims> Handle<WithDelims> for T {
+    fn to_bytes(
+        &self,
+        escape_byte: Option<u8>,
+        starting_delimiter: Option<Vec<u8>>,
+        ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        HandleWithDelims::to_bytes(self, escape_byte, starting_delimiter, ending_delimiter)
+    }
+}
+
+impl<T: HandleWithLength> Handle<WithLength> for T {
+    fn to_bytes(
+        &self,
+        _escape_byte: Option<u8>,
+        _starting_delimiter: Option<Vec<u8>>,
+        _ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        HandleWithLength::to_bytes(self)
     }
 }
 #[derive(Default, Clone)]
@@ -425,6 +431,13 @@ impl FileFrame {
     //&mut
 }
 
+pub trait StreamReceiver {
+    //type FrameOutput: FrameHandler;
+    type FrameOutput: FrameHandler<FrameOutput = Self::FrameOutput>;
+    fn create_frame_handler(&self) -> Self::FrameOutput;
+    async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError>;
+}
+
 #[derive(Debug)]
 pub enum FileStreamError {
     Disconnect,
@@ -438,6 +451,18 @@ pub struct TcpFsReceiver {
     start_delimiter: Option<Vec<u8>>,
     end_delimiter: Option<Vec<u8>>,
     escape_byte: Option<u8>,
+}
+impl StreamReceiver for TcpFsReceiver {
+    type FrameOutput = FrameEncoder;
+    fn create_frame_handler(&self) -> FrameEncoder {
+        FrameEncoder::new(self.start_delimiter.clone(), self.end_delimiter.clone(), self.escape_byte)
+    }
+    async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
+        match self.rx.recv_async().await {
+            Ok(byes) => Ok(byes),
+            Err(_) => Err(FileStreamError::Disconnect),
+        }
+    }
 }
 impl TcpFsReceiver {
     pub fn new(tx: flume::Sender<Vec<u8>>, rx: flume::Receiver<Vec<u8>>) -> TcpFsReceiver {
@@ -458,12 +483,7 @@ impl TcpFsReceiver {
     pub fn set_escape_byte(&mut self, escape_byte: u8) {
         self.escape_byte = Some(escape_byte);
     }
-    pub async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
-        match self.rx.recv_async().await {
-            Ok(byes) => Ok(byes),
-            Err(_) => Err(FileStreamError::Disconnect),
-        }
-    }
+
     pub fn send(&mut self, bytes: Vec<u8>) {
         let res = self.tx.send(bytes);
         println!("{:#?}", res);
@@ -492,6 +512,7 @@ impl Default for TcpFsReceiver {
         }
     }
 }
+
 pub struct TcpFsSender {
     tx: flume::Sender<Vec<u8>>,
     rx: flume::Receiver<Vec<u8>>,
@@ -500,7 +521,35 @@ pub struct TcpFsSender {
     end_delimiter: Option<Vec<u8>>,
     escape_byte: Option<u8>,
 }
+impl Default for TcpFsSender {
+    fn default() -> Self {
+        let (tx, rx) = flume::unbounded();
+        Self { tx, rx, byte_array: Default::default(), start_delimiter: Default::default(), end_delimiter: Default::default(), escape_byte: Default::default() }
+    }
+}
+pub trait StreamSender {
+    async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
+    where
+        S: Handle<W>;
+    async fn send(&mut self, bytes: Vec<u8>);
+}
 
+impl StreamSender for TcpFsSender {
+    async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
+    where
+        S: Handle<W>,
+    {
+        frame.to_bytes(
+            self.escape_byte,
+            self.start_delimiter.clone(),
+            self.end_delimiter.clone(),
+        )
+    }
+    async fn send(&mut self, bytes: Vec<u8>) {
+        let res = self.tx.send_async(bytes).await;
+        println!("{:#?}", res);
+    }
+}
 impl TcpFsSender {
     pub fn new(rx: flume::Receiver<Vec<u8>>, tx: flume::Sender<Vec<u8>>) -> TcpFsSender {
         TcpFsSender {
@@ -524,26 +573,13 @@ impl TcpFsSender {
     pub fn feed_bytes(&mut self, bytes: Vec<u8>) {
         self.byte_array.extend(bytes);
     }
-    pub async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
-        match self.rx.recv_async().await {
-            Ok(byes) => Ok(byes),
-            Err(_) => Err(FileStreamError::Disconnect),
-        }
-    }
-    pub async fn encode_frame<S>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
-    where
-        S: EncodeWithDelims,
-    {
-        frame.to_bytes(
-            self.escape_byte,
-            self.start_delimiter.clone(),
-            self.end_delimiter.clone(),
-        )
-    }
-    pub async fn send(&mut self, bytes: Vec<u8>) {
-        let res = self.tx.send_async(bytes).await;
-        println!("{:#?}", res);
-    }
+    // pub async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
+    //     match self.rx.recv_async().await {
+    //         Ok(byes) => Ok(byes),
+    //         Err(_) => Err(FileStreamError::Disconnect),
+    //     }
+    // }
+
 }
 pub struct File {
     pub original_location: Option<String>,
@@ -560,6 +596,10 @@ impl Clone for File {
     }
 }
 
+pub enum StreamableFileSystemErrors {
+    None
+}
+
 pub struct RemoteFileSystem<S> {
     state: S,
     local_state: HashMap<String, LocalState>,
@@ -567,6 +607,7 @@ pub struct RemoteFileSystem<S> {
     operation: Operation,
     codec: Codec,
     files: Vec<File>,
+    file_handle: Option<StdFile>,
     remainder: Vec<u8>, 
 }
 impl<S: Default> Default for RemoteFileSystem<S> {
@@ -578,6 +619,7 @@ impl<S: Default> Default for RemoteFileSystem<S> {
             operation: Operation::None,
             codec: Codec::Unknown,
             files: Vec::new(),
+            file_handle: None,
             remainder: Vec::new(), 
         }
     }
@@ -588,14 +630,14 @@ pub struct LocalState {
     pub location: String,
 }
 
-impl RemoteFileSystem<TcpFsReceiver> {
-    pub fn new(state: TcpFsReceiver) -> Self {
+impl <S: Default>RemoteFileSystem<S>{
+    pub fn new(state: S) -> Self {
         RemoteFileSystem {
             state,
             ..Default::default()
         }
     }
-    pub fn inner_mut(&mut self) -> &mut TcpFsReceiver {
+    pub fn inner_mut(&mut self) -> &mut S {
         &mut self.state
     }
     pub fn set_codec(&mut self, codec: Codec) {
@@ -610,6 +652,23 @@ impl RemoteFileSystem<TcpFsReceiver> {
     pub fn remove_state(&mut self, state_name: String) {
         self.local_state.remove(&state_name);
     }
+ 
+    pub fn set_operation(
+        &mut self,
+        operation: Operation,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.operation = operation;
+        Ok(())
+    }
+    pub fn clear_files(&mut self) {
+        self.files = vec![];
+    }
+    pub fn append_files(&mut self, file: File) {
+        self.files.push(file);
+    }
+}
+impl <S: Default + StreamReceiver>RemoteFileSystem<S> {
+
     fn patch_state_location_path(&mut self, state_name: &str) {
         if let Some(state) = self.local_state.get_mut(state_name) {
             if state.location.starts_with("//") {
@@ -620,7 +679,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
             }
         }
     }
-    pub async fn receive_operation(&mut self, fs_state_name: String) {
+    pub async fn receive_operation(&mut self, fs_state_name: String) -> Result<(), StreamableFileSystemErrors>  {
         println!("receiving in here");
         let new_location = "/home/spiderunderurbed/projects/tcp_fs_poc/output.jar";
         let mut file_handle: Option<std::fs::File> = None;
@@ -633,6 +692,7 @@ impl RemoteFileSystem<TcpFsReceiver> {
             temp_handle = std::fs::OpenOptions::new().append(true).open(new_location)
         }
         file_handle = Some(temp_handle.unwrap());
+        let remainder = &mut 0;
 
         loop {
             match self.state.get_chunk().await {
@@ -641,42 +701,38 @@ impl RemoteFileSystem<TcpFsReceiver> {
                     total_bytes.extend(self.remainder.clone());
                     self.remainder = Vec::new();
                     total_bytes.extend(bytes);
-                    //println!("{:?}", bytes);
-                    let mut frame = FrameEncoder::default();
-                    frame.remainder = self.remainder.clone();
-                    frame.starting_delimiter = self.state.start_delimiter.clone();
-                    frame.ending_delimiter = self.state.end_delimiter.clone();
-                    match frame.recursively_handle_bytes(&total_bytes) {
+                    let mut frame = self.state.create_frame_handler();
+                    frame.set_chunks(self.remainder.clone());
+                    // let mut frame = FrameEncoder::default();
+                    // frame.remainder = self.remainder.clone();
+                    // frame.starting_delimiter = self.state.start_delimiter.clone();
+                    // frame.ending_delimiter = self.state.end_delimiter.clone();
+                    
+                    match frame.append_bytes_recv(&total_bytes, remainder) {
                         Ok(frames) => {
-                            // if frames.len() == 0 {
-                            //     self.remainder = total_bytes;
-                            // }
-                            for (i, frame) in frames.iter().enumerate() {
-                                println!("frame {}: {:?}", i, frame.file_chunks);
+                            for frame in &frames {
                                 if let Some(mut handle) = file_handle.take() {
-                                    let chunks = &frame.file_chunks[4..frame.file_chunks.len()];
-                                    let res = handle.write_all(chunks);
-                                    let res = handle.flush();
-                                    let res = handle.sync_all();
+                                    //let owned_frame: S::FrameOutput = frame.to_frame_output();
+                                    let chunks = &frame.get_chunks()[4..frame.get_chunks().len()];
+                                    let _ = handle.write_all(chunks);
+                                    let _ = handle.flush();
+                                    let _ = handle.sync_all();
                                     file_handle = Some(handle);
                                 } else {
                                     println!("do not have handle");
                                 }
                             }
                             if let Some(last_frame) = frames.iter().last() {
-                                self.remainder.extend(last_frame.remainder.clone());
+                                self.remainder.extend(last_frame.get_remainder().clone());
                             }
                         }
                         Err(e) => match e {
                             FileFrameStatus::NotValidFrame => {}
                             FileFrameStatus::NoFrameDecoding => {}
                             FileFrameStatus::FrameNoBegins => {
-                                println!("this frame does not begin");
-                                println!("non-beginning frame {:?}", total_bytes);
                             }
                             FileFrameStatus::FrameNoEnds => {
                                 let remainder = total_bytes;
-                                    // &total_bytes[processed_frame_size..total_bytes.len()];
                                 self.remainder = remainder.to_vec();
                                 println!("this frame does not end");
                             }
@@ -684,89 +740,29 @@ impl RemoteFileSystem<TcpFsReceiver> {
                     }
                 }
                 Err(e) => {
-                    println!("got an error at the end: {:#?}", e);
-                    // for (i, frame) in all_frames.iter().enumerate() {
-                    //     println!("{}: frame chunks: {:?}", i, frame.file_chunks);
-                    //     //println!("{}: frame remainder: {:?}", i, frame.remainder);
-                    // }
-                    break;
-                    //println!("got a flume error");
+                    break Ok(());
                 }
             }
-            //processed_frame_size = 0;
         }
-        //})
     }
 }
-// fn log_head_tail(bytes: &[u8]) {
-//     let n = bytes.len();
-//     let head_n = n.min(10);
-//     let tail_n = n.min(10);
 
-//     let head = &bytes[..head_n];
-//     let tail = &bytes[n - tail_n..];
 
-//     println!(
-//         "sending {} bytes | first {}: {:?} | last {}: {:?}",
-//         n, head_n, head, tail_n, tail
-//     );
-// }
-static ESCAPE_BYTE: u8 = 22;
-impl RemoteFileSystem<TcpFsSender> {
-    pub fn new(state: TcpFsSender) -> Self {
-        Self {
-            // _marker: PhantomData,
-            state,
-            local_state: HashMap::new(),
-            direction: Direction::Unknown,
-            operation: Operation::None,
-            codec: Codec::Unknown,
-            files: Vec::new(),
-            remainder: Vec::new(), //task: Mutex::new(()), //in_operation: false,
-        }
-    }
-    pub fn inner_mut(&mut self) -> &mut TcpFsSender {
-        &mut self.state
-    }
-    pub fn set_codec(&mut self, codec: Codec) {
-        self.codec = codec;
-    }
-    pub fn set_direction(&mut self, direction: Direction) {
-        self.direction = direction;
-    }
-    pub fn set_operation(
-        &mut self,
-        operation: Operation,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.operation = operation;
-        Ok(())
-    }
-    pub fn create_state(&mut self, state_name: String, state: LocalState) {
-        self.local_state.insert(state_name, state);
-    }
-    pub fn remove_state(&mut self, state_name: String) {
-        self.local_state.remove(&state_name);
-    }
-    pub fn clear_files(&mut self) {
-        self.files = vec![];
-    }
-    pub fn append_files(&mut self, file: File) {
-        self.files.push(file);
-    }
+impl <S: StreamSender + Default>RemoteFileSystem<S> 
+// where S: StreamSender
+{
 
-    pub fn execute_operation(
+    pub async fn execute_operation(
         &mut self,
         fs_state_name: String,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + '_>,
-    > {
+    ) -> Result<(), StreamableFileSystemErrors> {
         match self.operation {
             Operation::Move => {
-                return Box::pin(async move {
+               // return Box::pin(async move {
                     let mut files = std::mem::take(&mut self.files);
                     for mut file in files.drain(..) {
                         self.operation = Operation::Set;
-                        let _ = self.execute_operation(file.final_location.clone()).await;
+                        let _ = Box::pin(self.execute_operation(file.final_location.clone())).await;
                         self.operation = Operation::Move;
                         match self.codec {
                             Codec::Raw => {
@@ -775,45 +771,15 @@ impl RemoteFileSystem<TcpFsSender> {
                             // Codec::RawContinues => {
                             // }
                             Codec::Multipart | Codec::RawContinues => {
-                                //let mut temp_buf: Vec<u8> = Vec::with_capacity(4080);
-                                //let mut position: u16 = 20;
-                                // let direction_header = self.direction.to_byte_header().unwrap();
-                                // let operation_header = self.operation.to_byte_header().unwrap();
-                                // let codec_header = self.codec.to_byte_header().unwrap();
-
-                                // let mut previous_buf: Vec<u8> = Vec::with_capacity(4096);
-                                //let mut delimiter_offset = 0;
-
-                                // let direction_header = self.direction.clone() as u8;
-                                // let operation_header = self.operation.clone() as u8;
-                                // let codec_header = self.codec.clone() as u8;
-                                // let mut frame = FileFrame::new(
-                                //     // self.state.start_delimiter.clone(),
-                                //     // self.state.end_delimiter.clone(),
-                                //     self.direction.clone(),
-                                //     self.operation.clone(),
-                                //     self.codec.clone(),
-                                //     ChunkingStatus::Continues,
-                                //     // Some(ESCAPE_BYTE)
-                                // );
-
                                 loop {
                                     let mut file_content_stream =
                                         file.content_stream.take().unwrap();
 
                                     match file_content_stream.recv_async().await {
                                         Ok(bytes) => {
-                                            println!("got some bytes");
-                                            // frame.append_bytes_recv(bytes);
-                                            //let guard = self.task.lock().await;
-                                            // frame.append_bytes_send(bytes.clone());
-                                            // println!("sending bytes {:#?}", bytes);
-                                            //if frame.file_chunks.len() >= 1000 {
                                             println!("got a bunch of bytes");
                                             for chunk in bytes.chunks(4096) {
                                                 let mut frame = FileFrame::new(
-                                                    // self.state.start_delimiter.clone(),
-                                                    // self.state.end_delimiter.clone(),
                                                     self.direction.clone(),
                                                     self.operation.clone(),
                                                     self.codec.clone(),
@@ -866,15 +832,16 @@ impl RemoteFileSystem<TcpFsSender> {
                                     file.content_stream = Some(file_content_stream);
                                 }
                             }
-                            _ => return Err("unimplimented".into()),
+                            _ => return  Err(StreamableFileSystemErrors::None),
                         }
                     }
                     Ok(())
-                });
+                //});
             }
-            Operation::None => return Box::pin(async { Err("unimplimented".into()) }),
+            Operation::None => Err(StreamableFileSystemErrors::None),
+            //Err("unimplimented".into()),
             Operation::Set => {
-                return Box::pin(async move {
+                //return Box::pin(async move {
                     //todo!()
                     Ok(())
                     // println!("setting");
@@ -894,12 +861,13 @@ impl RemoteFileSystem<TcpFsSender> {
                     // } else {
                     //     Err("err".into())
                     // }
-                });
+                //});
                 //return Box::pin(async { Err("unimplimented".into()) })
             }
             Operation::Ls => {
-                return Box::pin(async move {
-                    todo!()
+                return Err(StreamableFileSystemErrors::None);
+                // return Box::pin(async move {
+                    //todo!()
                     // if let Some(state) = self.local_state.get(&fs_state_name) {
                     //     let mut temp_buf: Vec<u8> = Vec::with_capacity(4080);
                     //     if let Some(start_delims) = &self.state.start_delimiter {
@@ -916,7 +884,7 @@ impl RemoteFileSystem<TcpFsSender> {
                     // } else {
                     //     Err("err".into())
                     // }
-                });
+                //});
             }
         }
     }
@@ -924,122 +892,3 @@ impl RemoteFileSystem<TcpFsSender> {
     //     true
     // }
 }
-
-// pub trait FsType: Clone + Send + Sync {}
-// impl FsType for TcpFsSender {}
-// impl FsType for TcpFsReceiver {}
-
-// temp_buf.push(direction_header);
-// temp_buf.push(operation_header);
-// // If it cannot fill the buffer change this to 1 to say it continues
-// temp_buf.push(codec_header);
-// // This says it does not continue, this will change if there is more to the buffer
-// temp_buf.push(1);
-
-// loop {
-//     let mut file_content_stream =
-//         file.content_stream.take().unwrap();
-//     match file_content_stream.recv().await {
-//         Ok(bytes) => {
-//                 if (bytes.len() as u16 + temp_buf.len() as u16) >= 4076 {
-//                     println!("continuing");
-//                     temp_buf[delimiter_offset + 3] = 0;
-//                     // self.state.send(temp_buf.clone()).await;
-//                     let previous_len = temp_buf.len();
-//                     temp_buf.extend_from_slice(&bytes);
-//                     loop {
-//                         let mut new_buf: Vec<u8> = temp_buf.drain(..previous_bytes_len).collect();
-//                         if let Some(end_delims) = &self.state.end_delimiter {
-//                             new_buf.extend(end_delims);
-//                         }
-//                         // temp_buf = Vec::new();
-//                         self.state.send(new_buf.clone()).await;
-//                         if let Some(start_delims) = &self.state.start_delimiter {
-//                             delimiter_offset = start_delims.len();
-//                             temp_buf.extend(start_delims);
-//                         }
-//                         temp_buf.push(direction_header);
-//                         temp_buf.push(operation_header);
-//                         temp_buf.push(codec_header);
-//                         temp_buf.push(1);
-//                         println!("byte len {}", bytes.len());
-//                         if (bytes.len() >= 4096)  || ((bytes.len() as u16 + temp_buf.len() as u16) < 4076) {
-//                             break;
-//                         }
-//                     }
-//                     // temp_buf.extend_from_slice(&bytes);
-//                     // if (bytes.len() as u16 + temp_buf.len() as u16) < 4076 {
-//                     //     break;
-//                     // }
-//                     break;
-//                     //break;
-//                 } else {
-//                     // Add the current data onto the buffer
-//                     println!("extending");
-//                     //position = bytes.len() as u16;
-//                     temp_buf.extend_from_slice(&bytes);
-//                     break;
-//                 }
-//             //}
-//         }
-//         Err(e) => {
-//             match e {
-//                 broadcast::error::RecvError::Closed => {
-//                     println!("closed");
-//                     break;
-//                 }
-//                 broadcast::error::RecvError::Lagged(_) => {
-//                     println!("lagged");
-//                 }
-//             }
-//         }
-//     }
-//     file.content_stream = Some(file_content_stream);
-// }
-// if let Some(end_delims) = &self.state.end_delimiter {
-//     temp_buf.extend(end_delims);
-// }
-//self.state.send(temp_buf).await;
-// self.file.content_stream = Some(stream);
-// self.recv_future = None;
-// if bytes.len() >= 4076 {
-//     println!("too long");
-//     return Err(
-//         "cannot send over 4076 bytes as a segment"
-//             .into(),
-//     );
-// }
-// This will continue on to the next message
-// so signify it continues then return the current buffer
-//println!("{} {}", bytes.len(), position);
-//loop {
-// pub struct RemoteFileSystem<S: FsType> {
-//     state: S,
-//     local_state: HashMap<String, LocalState>,
-//     direction: Direction,
-//     operation: Operation,
-//     codec: Codec,
-//     files: Vec<File>,
-// }
-// pub struct RemoteFileSystem<TcpFsSender> {
-//     state: S,
-//     local_state: HashMap<String, LocalState>,
-//     direction: Direction,
-//     operation: Operation,
-//     codec: Codec,
-//     files: Vec<File>,
-// }
-// pub struct RemoteFileSystem<TcpFsReceiver> {
-//     state: S,
-// }
-
-// impl<S: FsType> RemoteFileSystem<S> {
-//     pub fn new(_state: S) -> Self {
-//         Self {
-//             _marker: PhantomData,
-//             local_state: HashMap::new(),
-//         }
-//     }
-// }
-// trait WorkingFs: Clone + Send + Sync {
-// }

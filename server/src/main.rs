@@ -61,7 +61,7 @@ async fn main() -> std::io::Result<()> {
                             }
                             Ok(n) => {
                                 let data = &temp_buf[..n];
-                                println!("read {} bytes: {:?}", n, data);
+                                //println!("read {} bytes: {:?}", n, data);
 
                                 filesystem_for_read_task.inner_mut().send(data.to_vec());
                             }
