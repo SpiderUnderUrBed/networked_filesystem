@@ -9,14 +9,14 @@ use tokio::{
 
 use input_macro::input;
 use networked_filesystem::{
-    Codec, Direction, File, LocalState, Operation, RemoteFileSystem, TcpFsSender,
+    Codec, Direction, LocalState, Operation, RemoteFileSystem, flume_delimited::{FlumeFile, TcpFsSender},
 };
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 struct AppState {
-    filesystem: Arc<RwLock<RemoteFileSystem<TcpFsSender>>>,
+    filesystem: Arc<RwLock<RemoteFileSystem<TcpFsSender, FlumeFile>>>,
 }
 
 #[tokio::main]
@@ -35,7 +35,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             tokio::select! {
                 Ok(out) = rx_clone.recv_async() => {
-                    println!("out bytes: {:?}", out);
                     if let Err(e) = write_half.write_all(&out).await {
                         eprintln!("write error: {e}");
                         break;
@@ -66,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut tcp_fs = TcpFsSender::new(rx.clone(), tx.clone());
     tcp_fs.set_start_delimiter(r"\\\\f".as_bytes().to_vec());
     tcp_fs.set_end_delimiter("////f".as_bytes().to_vec());
-    let mut filesystem = RemoteFileSystem::<TcpFsSender>::new(tcp_fs);
+    let mut filesystem = RemoteFileSystem::<TcpFsSender, FlumeFile>::new(tcp_fs);
     filesystem.set_direction(Direction::Local);
     filesystem.set_codec(Codec::RawContinues);
     // filesystem.create_state("main".to_owned(), LocalState { location: "/".to_string() });
@@ -85,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 let mut filesystem = inner_state.filesystem.write().await;
                 filesystem.create_state(
-                    "main".to_string(),
+                    0,
                     LocalState {
                         // TODO: set back to /
                         location: "/".to_string(),
@@ -95,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let _ = filesystem.set_operation(Operation::Move);
 
                 filesystem.clear_files();
-                let file = File {
+                let file = FlumeFile {
                     original_location: None,
                     final_location: "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt"
                         .to_owned(),
@@ -107,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let handle = tokio::spawn(async move {
                 let state = arc_state_clone.write().await;
                 let mut filesystem = state.filesystem.write().await;
-                let _ = filesystem.execute_operation("main".to_string()).await;
+                let _ = filesystem.execute_operation(0).await;
             });
 
             //let file_path = Path::new("/home/spiderunderurbed/projects/tcp_fs_poc/test.txt");
@@ -159,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 let mut filesystem = inner_state.filesystem.write().await;
                 filesystem.create_state(
-                    "main".to_string(),
+                    0,
                     LocalState {
                         // TODO: set back to /
                         location: "/home/spiderunderurbed/projects/tcp_fs_poc/".to_string(),
@@ -172,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let handle = tokio::spawn(async move {
                 let state = arc_state_clone.write().await;
                 let mut filesystem = state.filesystem.write().await;
-                let _ = filesystem.execute_operation("main".to_string()).await;
+                let _ = filesystem.execute_operation(0).await;
             });
             //drop(tx);
             //tx_option = None;

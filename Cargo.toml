@@ -10,7 +10,7 @@ flume = "0.12.0"
 
 [workspace]
 resolver = "3"
-members = ["server", "client", "networked_filesystem"]
+members = ["demos/delimited/server", "demos/delimited/client", "networked_filesystem"]
 
 # Source - https://stackoverflow.com/a/36604610
 # Posted by Dogbert, modified by community. See post 'Timeline' for change history
@@ -18,8 +18,8 @@ members = ["server", "client", "networked_filesystem"]
 
 [[bin]]
 name = "client"
-path = "client/src/main.rs"
+path = "demos/delimited/client/src/main.rs"
 
 [[bin]]
 name = "server"
-path = "server/src/main.rs"
+path = "demos/delimited/server/src/main.rs"

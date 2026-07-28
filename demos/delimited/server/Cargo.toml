@@ -1,12 +1,11 @@
 [package]
-name = "client"
+name = "server"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-input-macro = "0.2.0"
 tokio = { version = "1.52.3", features = ["full"] }
-networked_filesystem = { path = "../networked_filesystem" }
+networked_filesystem = { path = "../../../networked_filesystem" }
 serde = { version = "1.0.219", features = ["serde_derive", "derive"] }
 serde_json = "1.0.140"
 flume = "0.12.0"
