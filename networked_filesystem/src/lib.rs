@@ -69,6 +69,7 @@ pub enum ChunkingStatus {
 
 pub trait FrameHandler {
     type FrameOutput;
+    fn encode_bytes(&self, headers: Vec<u8>, content: Vec<u8>) -> Vec<u8>;
     fn append_bytes_recv(
         &mut self,
         bytes: &Vec<u8>,

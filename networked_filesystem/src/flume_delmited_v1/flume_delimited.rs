@@ -275,7 +275,12 @@ impl FrameEncoder {
             escape_byte,
         }
     }
-    pub fn encode_bytes(&self, headers: Vec<u8>, content: Vec<u8>) -> Vec<u8> {
+
+
+}
+impl FrameHandler for FrameEncoder {
+    type FrameOutput = Self;
+    fn encode_bytes(&self, headers: Vec<u8>, content: Vec<u8>) -> Vec<u8> {
         let mut bytes_frame = Vec::new();
         if let Some(ref starting_delimiter) = self.starting_delimiter {
             bytes_frame.extend(starting_delimiter);
@@ -302,10 +307,6 @@ impl FrameEncoder {
         }
         bytes_frame
     }
-
-}
-impl FrameHandler for FrameEncoder {
-    type FrameOutput = Self;
     fn append_bytes_recv(
         &mut self,
         bytes: &Vec<u8>,
