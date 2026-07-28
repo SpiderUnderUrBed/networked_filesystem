@@ -11,6 +11,24 @@ pub enum SubsequenceStatus {
     Continue,
     FoundAt(usize),
 }
+
+// TODO:?
+// make it so it will return a pos at continue, it will 100% update starting_offset to it, depending on the situation it will consume the next byte, and continue the loop
+pub fn find_subsequence_by_windows_iter(
+    delimiter_iter: std::slice::Iter<u8>,
+    iter: MultiPeek<std::vec::IntoIter<u8>>,
+) -> SubsequenceStatus {
+    let remaining_delimiter: Vec<u8> = delimiter_iter.copied().collect();
+    let remaining_bytes = iter.collect::<Vec<u8>>();
+    match remaining_bytes
+        .windows(remaining_delimiter.len())
+        .position(|window| window == remaining_delimiter)
+    {
+        Some(pos) => SubsequenceStatus::FoundAt(pos),
+        None => SubsequenceStatus::NotMatched,
+    }
+}
+
 pub fn find_subsequence_bytes_full(
     delimiter: Vec<u8>,
     bytes: Vec<u8>,
@@ -30,23 +48,6 @@ pub fn find_subsequence_bytes_full(
             }
         }
         return Ok(final_pos);
-    }
-}
-
-// TODO:?
-// make it so it will return a pos at continue, it will 100% update starting_offset to it, depending on the situation it will consume the next byte, and continue the loop
-pub fn find_subsequence_by_windows_iter(
-    delimiter_iter: std::slice::Iter<u8>,
-    iter: MultiPeek<std::vec::IntoIter<u8>>,
-) -> SubsequenceStatus {
-    let remaining_delimiter: Vec<u8> = delimiter_iter.copied().collect();
-    let remaining_bytes = iter.collect::<Vec<u8>>();
-    match remaining_bytes
-        .windows(remaining_delimiter.len())
-        .position(|window| window == remaining_delimiter)
-    {
-        Some(pos) => SubsequenceStatus::FoundAt(pos),
-        None => SubsequenceStatus::NotMatched,
     }
 }
 pub fn find_subsequence_bytes_iter(
