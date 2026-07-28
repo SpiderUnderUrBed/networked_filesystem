@@ -1,4 +1,5 @@
-use networked_filesystem::{Direction, LocalState, RemoteFileSystem, TcpFsReceiver};
+use networked_filesystem::flume_delimited::{FlumeFile, TcpFsReceiver};
+use networked_filesystem::{Direction, LocalState, RemoteFileSystem};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -12,7 +13,7 @@ use tokio::{
 struct PingRequest {}
 
 struct AppState {
-    filesystem: Arc<RwLock<RemoteFileSystem<TcpFsReceiver>>>,
+    filesystem: Arc<RwLock<RemoteFileSystem<TcpFsReceiver, FlumeFile>>>,
 }
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -24,10 +25,10 @@ async fn main() -> std::io::Result<()> {
         let mut receiver = TcpFsReceiver::new(fs_tx.clone(), fs_rx);
         receiver.set_start_delimiter(r"\\\\f".as_bytes().to_vec());
         receiver.set_end_delimiter("////f".as_bytes().to_vec());
-        let mut filesystem = RemoteFileSystem::<TcpFsReceiver>::new(receiver);
+        let mut filesystem = RemoteFileSystem::<TcpFsReceiver, FlumeFile>::new(receiver);
         filesystem.set_direction(Direction::Server);
         filesystem.create_state(
-            "main".to_owned(),
+            0,
             LocalState {
                 location: "/".to_string(),
             },
@@ -61,7 +62,7 @@ async fn main() -> std::io::Result<()> {
                             }
                             Ok(n) => {
                                 let data = &temp_buf[..n];
-                                println!("read {} bytes: {:?}", n, data);
+                                //println!("read {} bytes: {:?}", n, data);
 
                                 filesystem_for_read_task.inner_mut().send(data.to_vec());
                             }
@@ -71,7 +72,7 @@ async fn main() -> std::io::Result<()> {
                             }
                         }
                     }
-                    _ = filesystem_for_read_task.receive_operation("main".to_string()) => {
+                    _ = filesystem_for_read_task.receive_operation(0) => {
                         println!("finished receiving");
                     }
                 }
