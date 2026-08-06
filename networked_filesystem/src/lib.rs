@@ -111,7 +111,7 @@ impl<T: HandleWithLength> Handle<WithLength> for T {
     }
 }
 #[derive(Default, Clone)]
-struct FileFrame {
+pub struct FileFrame {
     direction: Option<Direction>,
     operation: Option<Operation>,
     codec: Option<Codec>,
@@ -123,6 +123,9 @@ pub enum FileFrameStatus {
     FrameNoEnds,
     NotValidFrame,
     NoFrameDecoding, 
+}
+pub trait FileEncoder {
+    fn decode(bytes: Vec<u8>) -> Result<FileFrame, FileFrameStatus>;
 }
 impl FileFrame {
     fn new(
@@ -140,6 +143,14 @@ impl FileFrame {
             chunks: Vec::new(),
         }
     }
+    fn append_bytes_send(&mut self, bytes: Vec<u8>) {
+        self.chunks.extend(bytes);
+    }
+    fn flush(&mut self) {
+        self.chunks = Vec::new();
+    }
+}
+impl FileEncoder for FileFrame {
     fn decode(mut bytes: Vec<u8>) -> Result<FileFrame, FileFrameStatus> {
         let mut frame = FileFrame::default();
         if let Some(byte) = bytes.get(0) {
@@ -185,12 +196,6 @@ impl FileFrame {
         frame.chunks.extend(bytes);
         Ok(frame)
     }
-    fn append_bytes_send(&mut self, bytes: Vec<u8>) {
-        self.chunks.extend(bytes);
-    }
-    fn flush(&mut self) {
-        self.chunks = Vec::new();
-    }
 }
 
 pub trait StreamReceiver {
@@ -216,6 +221,7 @@ pub trait StreamSender {
 
 
 pub trait FileSender {
+    type Encoder: FileEncoder;
     async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
     fn get_location(&self) -> String;
 }
@@ -226,6 +232,7 @@ pub enum StreamableFileSystemErrors {
     IncorrectStateAsked,
     IncorrectData
 }
+
 
 pub struct RemoteFileSystem<S, F> 
 {
@@ -253,7 +260,7 @@ impl<S: Default, F> Default for RemoteFileSystem<S, F> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalState {
     pub location: String,
 }
@@ -297,7 +304,7 @@ impl <S: Default, F>RemoteFileSystem<S, F>{
         self.files.push(file);
     }
 }
-impl <S: Default + StreamReceiver, F>RemoteFileSystem<S, F> {
+impl <S: Default + StreamReceiver, F: FileSender>RemoteFileSystem<S, F> {
     pub async fn receive_operation(&mut self, fs_state_id: u8) -> Result<(), StreamableFileSystemErrors>  {
         let remainder = &mut 0;
 
@@ -315,7 +322,7 @@ impl <S: Default + StreamReceiver, F>RemoteFileSystem<S, F> {
                         Ok(frames) => {
                             for frame in &frames {
                                 let chunks = frame.get_chunks();
-                                if let Ok(file_frame) = FileFrame::decode(chunks.clone()){
+                                if let Ok(file_frame) = F::Encoder::decode(chunks.clone()){
                                     if self.file_handle.is_none() {
                                         if let Some(state) = self.local_state.get(&fs_state_id){
                                             let location = &state.location;

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fs::File};
 
 use multipeek::IteratorExt;
 
@@ -19,6 +19,7 @@ impl Clone for FlumeFile {
     }
 }
 impl FileSender for FlumeFile {
+    type Encoder = FileFrame;
     async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let stream = self.content_stream.take().unwrap();
         let result;
