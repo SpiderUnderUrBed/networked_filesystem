@@ -24,18 +24,22 @@ impl Clone for FlumeFile {
 }
 impl FileSender for FlumeFile {
     async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let stream = self.content_stream.take().unwrap();
-        let result;
-        match stream.recv_async().await {
-            Ok(bytes) => {
-                result = bytes;
+        // let stream = self.content_stream.take().unwrap();
+        if let Some(stream) = self.content_stream.take() {
+            let result;
+            match stream.recv_async().await {
+                Ok(bytes) => {
+                    result = bytes;
+                }
+                Err(e) => {
+                    return Err(Box::new(e));
+                }
             }
-            Err(e) => {
-                return Err(Box::new(e));
-            }
+            self.content_stream = Some(stream);
+            return Ok(result);
+        } else {
+            Err("no stream".into())
         }
-        self.content_stream = Some(stream);
-        return Ok(result);
     }
 
     fn get_location(&self) -> String {
