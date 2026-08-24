@@ -2,7 +2,11 @@ use std::collections::VecDeque;
 
 use multipeek::IteratorExt;
 
-use crate::{FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameHandler, Handle, SetFrame, StreamReceiver, StreamSender, delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter}};
+use crate::{
+    FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameHandler, Handle, SetFrame,
+    StreamReceiver, StreamSender,
+    delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter},
+};
 
 pub struct FlumeFile {
     pub original_location: Option<String>,
@@ -20,18 +24,22 @@ impl Clone for FlumeFile {
 }
 impl FileSender for FlumeFile {
     async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let stream = self.content_stream.take().unwrap();
-        let result;
-        match stream.recv_async().await {
-            Ok(bytes) => {
-                result = bytes;
-            },
-            Err(e) => {
-                return Err(Box::new(e));
-            },
+        // let stream = self.content_stream.take().unwrap();
+        if let Some(stream) = self.content_stream.take() {
+            let result;
+            match stream.recv_async().await {
+                Ok(bytes) => {
+                    result = bytes;
+                }
+                Err(e) => {
+                    return Err(Box::new(e));
+                }
+            }
+            self.content_stream = Some(stream);
+            return Ok(result);
+        } else {
+            Err("no stream".into())
         }
-        self.content_stream = Some(stream);
-        return Ok(result);
     }
 
     fn get_location(&self) -> String {
@@ -50,7 +58,6 @@ pub trait HandleWithDelims {
         ending_delimiter: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, FileFrameStatus>;
     //    fn create_frame_handler() -> Self::FrameOutput;
-
 }
 impl HandleWithDelims for FileFrame {
     // type FrameOutput = FrameEncoder;
@@ -86,7 +93,6 @@ impl HandleWithDelims for FileFrame {
 
         Ok(bytes_frame)
     }
-
 }
 
 impl HandleWithDelims for SetFrame {
@@ -127,10 +133,9 @@ impl<T: HandleWithDelims> Handle<WithDelims> for T {
     }
 }
 
-
 pub struct TcpFsReceiver {
-    tx: flume::Sender<Vec<u8>>,
-    rx: flume::Receiver<Vec<u8>>,
+    pub tx: flume::Sender<Vec<u8>>,
+    pub rx: flume::Receiver<Vec<u8>>,
     start_delimiter: Option<Vec<u8>>,
     end_delimiter: Option<Vec<u8>>,
     escape_byte: Option<u8>,
@@ -138,7 +143,11 @@ pub struct TcpFsReceiver {
 impl StreamReceiver for TcpFsReceiver {
     type FrameOutput = FrameEncoder;
     fn create_frame_handler(&self) -> FrameEncoder {
-        FrameEncoder::new(self.start_delimiter.clone(), self.end_delimiter.clone(), self.escape_byte)
+        FrameEncoder::new(
+            self.start_delimiter.clone(),
+            self.end_delimiter.clone(),
+            self.escape_byte,
+        )
     }
     async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
         match self.rx.recv_async().await {
@@ -196,8 +205,8 @@ impl Default for TcpFsReceiver {
 }
 
 pub struct TcpFsSender {
-    tx: flume::Sender<Vec<u8>>,
-    rx: flume::Receiver<Vec<u8>>,
+    pub tx: flume::Sender<Vec<u8>>,
+    pub rx: flume::Receiver<Vec<u8>>,
     byte_array: Vec<u8>,
     start_delimiter: Option<Vec<u8>>,
     end_delimiter: Option<Vec<u8>>,
@@ -206,7 +215,14 @@ pub struct TcpFsSender {
 impl Default for TcpFsSender {
     fn default() -> Self {
         let (tx, rx) = flume::unbounded();
-        Self { tx, rx, byte_array: Default::default(), start_delimiter: Default::default(), end_delimiter: Default::default(), escape_byte: Default::default() }
+        Self {
+            tx,
+            rx,
+            byte_array: Default::default(),
+            start_delimiter: Default::default(),
+            end_delimiter: Default::default(),
+            escape_byte: Default::default(),
+        }
     }
 }
 
@@ -248,7 +264,6 @@ impl TcpFsSender {
     pub fn feed_bytes(&mut self, bytes: Vec<u8>) {
         self.byte_array.extend(bytes);
     }
-
 }
 
 #[derive(Default, Clone)]
@@ -275,8 +290,6 @@ impl FrameEncoder {
             escape_byte,
         }
     }
-
-
 }
 impl FrameHandler for FrameEncoder {
     type FrameOutput = Self;
@@ -310,7 +323,7 @@ impl FrameHandler for FrameEncoder {
     fn append_bytes_recv(
         &mut self,
         bytes: &Vec<u8>,
-        _: &mut u64
+        _: &mut u64,
     ) -> Result<VecDeque<Self>, FileFrameStatus> {
         let mut subframes: VecDeque<Self> = VecDeque::new();
         let mut total_bytes = self.remainder.clone();
@@ -361,8 +374,7 @@ impl FrameHandler for FrameEncoder {
                 Ok(frames) => {
                     subframes.extend(frames);
                 }
-                Err(_) => {
-                }
+                Err(_) => {}
             }
             return Ok(subframes);
         } else {
@@ -414,24 +426,24 @@ impl FrameHandler for FrameEncoder {
                                     self.file_chunks = self.file_chunks
                                         [0..self.file_chunks.len() - ending_delimiter.len()]
                                         .to_vec();
-                                } 
+                                }
                             }
                         } else {
                         }
-                        return Err(FileFrameStatus::FrameNoEnds)
+                        return Err(FileFrameStatus::FrameNoEnds);
                     }
                     return Ok(subframes);
                 }
             }
         }
     }
-    fn set_chunks(&mut self, chunks: Vec<u8>){
+    fn set_chunks(&mut self, chunks: Vec<u8>) {
         self.remainder = chunks;
     }
     fn get_remainder(&self) -> Vec<u8> {
         self.remainder.clone()
     }
-    
+
     fn get_chunks(&self) -> Vec<u8> {
         self.file_chunks.clone()
     }

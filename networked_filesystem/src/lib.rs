@@ -17,10 +17,12 @@ use std::{
 use multer::bytes::{self, buf};
 use multipeek::{IteratorExt, MultiPeek};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use tokio::{fs::File, sync::{Mutex, Notify, broadcast}};
-use tokio::{io::AsyncWriteExt, sync::watch};
 use std::fs::File as StdFile;
-
+use tokio::{
+    fs::File,
+    sync::{Mutex, Notify, broadcast},
+};
+use tokio::{io::AsyncWriteExt, sync::watch};
 
 pub use flume_delmited_v1::*;
 
@@ -38,7 +40,6 @@ pub enum Direction {
     Unknown = 2,
 }
 
-
 #[derive(Clone, TryFromPrimitive)]
 #[repr(u8)]
 pub enum Operation {
@@ -48,7 +49,6 @@ pub enum Operation {
     // LsWithRange { start: u64, end: u64 },
     None = 4,
 }
-
 
 #[derive(Clone, TryFromPrimitive)]
 #[repr(u8)]
@@ -66,14 +66,13 @@ pub enum ChunkingStatus {
     End = 1,
 }
 
-
 pub trait FrameHandler {
     type FrameOutput;
     fn encode_bytes(&self, headers: Vec<u8>, content: Vec<u8>) -> Vec<u8>;
     fn append_bytes_recv(
         &mut self,
         bytes: &Vec<u8>,
-        _: &mut u64
+        _: &mut u64,
     ) -> Result<VecDeque<Self::FrameOutput>, FileFrameStatus>;
     // fn set_remainder(&mut self, remainder: Vec<u8>);
     fn set_chunks(&mut self, chunks: Vec<u8>);
@@ -81,11 +80,9 @@ pub trait FrameHandler {
     fn get_chunks(&self) -> Vec<u8>;
 }
 
-
 pub trait HandleWithLength {
     fn to_bytes(&self) -> Result<Vec<u8>, FileFrameStatus>;
 }
-
 
 pub struct WithLength;
 
@@ -97,8 +94,6 @@ pub trait Handle<W> {
         ending_delimiter: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, FileFrameStatus>;
 }
-
-
 
 impl<T: HandleWithLength> Handle<WithLength> for T {
     fn to_bytes(
@@ -122,7 +117,7 @@ pub enum FileFrameStatus {
     FrameNoBegins,
     FrameNoEnds,
     NotValidFrame,
-    NoFrameDecoding, 
+    NoFrameDecoding,
 }
 impl FileFrame {
     fn new(
@@ -143,44 +138,44 @@ impl FileFrame {
     fn decode(mut bytes: Vec<u8>) -> Result<FileFrame, FileFrameStatus> {
         let mut frame = FileFrame::default();
         if let Some(byte) = bytes.get(0) {
-            if let Ok(direction) = Direction::try_from_primitive(*byte){
+            if let Ok(direction) = Direction::try_from_primitive(*byte) {
                 frame.direction = Some(direction);
             } else {
-                return Err(FileFrameStatus::NotValidFrame)
+                return Err(FileFrameStatus::NotValidFrame);
             }
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
         if let Some(byte) = bytes.get(0) {
-            if let Ok(operation) = Operation::try_from_primitive(*byte){
+            if let Ok(operation) = Operation::try_from_primitive(*byte) {
                 frame.operation = Some(operation);
             } else {
-                return Err(FileFrameStatus::NotValidFrame)
+                return Err(FileFrameStatus::NotValidFrame);
             }
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
         if let Some(byte) = bytes.get(0) {
-            if let Ok(codec) = Codec::try_from_primitive(*byte){
+            if let Ok(codec) = Codec::try_from_primitive(*byte) {
                 frame.codec = Some(codec);
             } else {
-                return Err(FileFrameStatus::NotValidFrame)
+                return Err(FileFrameStatus::NotValidFrame);
             }
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
         if let Some(byte) = bytes.get(0) {
-            if let Ok(continues) = ChunkingStatus::try_from_primitive(*byte){
+            if let Ok(continues) = ChunkingStatus::try_from_primitive(*byte) {
                 frame.chunking_status = Some(continues);
             } else {
-                return Err(FileFrameStatus::NotValidFrame)
+                return Err(FileFrameStatus::NotValidFrame);
             }
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
         frame.chunks.extend(bytes);
         Ok(frame)
@@ -205,7 +200,6 @@ pub enum FileStreamError {
     Disconnect,
 }
 
-
 pub trait StreamSender {
     async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
@@ -213,22 +207,20 @@ pub trait StreamSender {
     async fn send(&mut self, bytes: Vec<u8>);
 }
 
-
-
 pub trait FileSender {
     async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
     fn get_location(&self) -> String;
 }
 
+#[derive(Debug)]
 pub enum StreamableFileSystemErrors {
     None,
     NoStateGiven,
     IncorrectStateAsked,
-    IncorrectData
+    IncorrectData,
 }
 
-pub struct RemoteFileSystem<S, F> 
-{
+pub struct RemoteFileSystem<S, F> {
     state: S,
     local_state: HashMap<u8, LocalState>,
     direction: Direction,
@@ -236,7 +228,7 @@ pub struct RemoteFileSystem<S, F>
     codec: Codec,
     files: Vec<F>,
     file_handle: Option<StdFile>,
-    remainder: Vec<u8>, 
+    remainder: Vec<u8>,
 }
 impl<S: Default, F> Default for RemoteFileSystem<S, F> {
     fn default() -> Self {
@@ -248,19 +240,17 @@ impl<S: Default, F> Default for RemoteFileSystem<S, F> {
             codec: Codec::Unknown,
             files: Vec::new(),
             file_handle: None,
-            remainder: Vec::new(), 
+            remainder: Vec::new(),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LocalState {
     pub location: String,
 }
 
-
-
-impl <S: Default, F>RemoteFileSystem<S, F>{
+impl<S: Default, F> RemoteFileSystem<S, F> {
     pub fn new(state: S) -> Self {
         RemoteFileSystem {
             state,
@@ -282,7 +272,7 @@ impl <S: Default, F>RemoteFileSystem<S, F>{
     pub fn remove_state(&mut self, state_id: u8) {
         self.local_state.remove(&state_id);
     }
- 
+
     pub fn set_operation(
         &mut self,
         operation: Operation,
@@ -297,8 +287,11 @@ impl <S: Default, F>RemoteFileSystem<S, F>{
         self.files.push(file);
     }
 }
-impl <S: Default + StreamReceiver, F>RemoteFileSystem<S, F> {
-    pub async fn receive_operation(&mut self, fs_state_id: u8) -> Result<(), StreamableFileSystemErrors>  {
+impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
+    pub async fn receive_operation(
+        &mut self,
+        fs_state_id: u8,
+    ) -> Result<(), StreamableFileSystemErrors> {
         let remainder = &mut 0;
 
         loop {
@@ -310,44 +303,49 @@ impl <S: Default + StreamReceiver, F>RemoteFileSystem<S, F> {
                     total_bytes.extend(bytes);
                     let mut frame = self.state.create_frame_handler();
                     frame.set_chunks(self.remainder.clone());
-   
+
                     match frame.append_bytes_recv(&total_bytes, remainder) {
                         Ok(frames) => {
                             for frame in &frames {
                                 let chunks = frame.get_chunks();
-                                if let Ok(file_frame) = FileFrame::decode(chunks.clone()){
+                                if let Ok(file_frame) = FileFrame::decode(chunks.clone()) {
                                     if self.file_handle.is_none() {
-                                        if let Some(state) = self.local_state.get(&fs_state_id){
+                                        if let Some(state) = self.local_state.get(&fs_state_id) {
                                             let location = &state.location;
-                                            let mut temp_handle = std::fs::OpenOptions::new().truncate(true).append(true).open(location);
+                                            let mut temp_handle = std::fs::OpenOptions::new()
+                                                .truncate(true)
+                                                .append(true)
+                                                .open(location);
                                             if let Err(_) = temp_handle {
-                                                let _ = std::fs::File::create(
-                                                    location,
-                                                );
-                                                temp_handle = std::fs::OpenOptions::new().append(true).open(location)
+                                                let _ = std::fs::File::create(location);
+                                                temp_handle = std::fs::OpenOptions::new()
+                                                    .append(true)
+                                                    .open(location)
                                             }
                                             self.file_handle = Some(temp_handle.unwrap());
                                         } else {
                                             return Err(StreamableFileSystemErrors::NoStateGiven);
                                         }
-                                    } 
+                                    }
 
                                     // if let Some(mut handle) = self.file_handle.take() {
-                                    let mut handle = self.file_handle.take().unwrap(); 
+                                    let mut handle = self.file_handle.take().unwrap();
                                     let _ = handle.write_all(&file_frame.chunks);
                                     let _ = handle.flush();
                                     let _ = handle.sync_all();
 
                                     self.file_handle = Some(handle);
-                                } else if let Ok(set_frame) = SetFrame::decode(chunks){
-                                    if let Some(state) = self.local_state.get_mut(&set_frame.state_id){
-                                        if let Ok(location) = String::from_utf8(set_frame.chunks){
+                                } else if let Ok(set_frame) = SetFrame::decode(chunks) {
+                                    if let Some(state) =
+                                        self.local_state.get_mut(&set_frame.state_id)
+                                    {
+                                        if let Ok(location) = String::from_utf8(set_frame.chunks) {
                                             state.location = location;
                                         } else {
-                                            return Err(StreamableFileSystemErrors::IncorrectData)
+                                            return Err(StreamableFileSystemErrors::IncorrectData);
                                         }
                                     } else {
-                                        return Err(StreamableFileSystemErrors::IncorrectStateAsked)
+                                        return Err(StreamableFileSystemErrors::IncorrectStateAsked);
                                     }
                                 }
                             }
@@ -358,8 +356,7 @@ impl <S: Default + StreamReceiver, F>RemoteFileSystem<S, F> {
                         Err(e) => match e {
                             FileFrameStatus::NotValidFrame => {}
                             FileFrameStatus::NoFrameDecoding => {}
-                            FileFrameStatus::FrameNoBegins => {
-                            }
+                            FileFrameStatus::FrameNoBegins => {}
                             FileFrameStatus::FrameNoEnds => {
                                 let remainder = total_bytes;
                                 self.remainder = remainder.to_vec();
@@ -376,80 +373,79 @@ impl <S: Default + StreamReceiver, F>RemoteFileSystem<S, F> {
     }
 }
 
-
-impl <S: StreamSender + Default, F: FileSender>RemoteFileSystem<S, F> 
+impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
 // where S: StreamSender
 {
-
     pub async fn execute_operation(
         &mut self,
         state_id: u8,
     ) -> Result<(), StreamableFileSystemErrors> {
         match self.operation {
             Operation::Move => {
-               // return Box::pin(async move {
-                    let mut files = std::mem::take(&mut self.files);
-                    for mut file in files.drain(..) {
-                        self.operation = Operation::Set;
-                        if let Some(state) = self.local_state.get_mut(&state_id){
-                            state.location = file.get_location();
-                        } else {
-                            return Err(StreamableFileSystemErrors::NoStateGiven)
+                // return Box::pin(async move {
+                let mut files = std::mem::take(&mut self.files);
+                for mut file in files.drain(..) {
+                    self.operation = Operation::Set;
+                    if let Some(state) = self.local_state.get_mut(&state_id) {
+                        state.location = file.get_location();
+                    } else {
+                        return Err(StreamableFileSystemErrors::NoStateGiven);
+                    }
+                    let _ = Box::pin(self.execute_operation(state_id)).await;
+                    self.operation = Operation::Move;
+                    match self.codec {
+                        Codec::Multipart => {
+                            todo!()
                         }
-                        let _ = Box::pin(self.execute_operation(state_id)).await;
-                        self.operation = Operation::Move;
-                        match self.codec {
-                            Codec::Multipart => {
-                                todo!()
-                            }
-                            // Codec::RawContinues => {
-                            // }
-                            Codec::Raw | Codec::RawContinues => {
-                                loop {
-                                    // let file_content_stream =
-                                    //     file.content_stream.take().unwrap();
+                        // Codec::RawContinues => {
+                        // }
+                        Codec::Raw | Codec::RawContinues => {
+                            loop {
+                                // let file_content_stream =
+                                //     file.content_stream.take().unwrap();
 
-                                    match file.get_chunk().await {
-                                        Ok(bytes) => {
-                                            println!("got a bunch of bytes");
-                                            for chunk in bytes.chunks(4096) {
-                                                let mut frame = FileFrame::new(
-                                                    self.direction.clone(),
-                                                    Operation::Move,
-                                                    self.codec.clone(),
-                                                    ChunkingStatus::Continues,
-                                                    // Some(ESCAPE_BYTE)
-                                                );
-                                                frame.append_bytes_send(chunk.to_vec());
+                                match file.get_chunk().await {
+                                    Ok(bytes) => {
+                                        println!("got a bunch of bytes");
+                                        for chunk in bytes.chunks(4096) {
+                                            let mut frame = FileFrame::new(
+                                                self.direction.clone(),
+                                                Operation::Move,
+                                                self.codec.clone(),
+                                                ChunkingStatus::Continues,
+                                                // Some(ESCAPE_BYTE)
+                                            );
+                                            frame.append_bytes_send(chunk.to_vec());
 
-
-                                                if let Ok(bytes) =
-                                                    self.state.encode_frame(frame.clone()).await
-                                                {
-                                                    self.state.send(bytes).await;
-                                                } 
+                                            if let Ok(bytes) =
+                                                self.state.encode_frame(frame.clone()).await
+                                            {
+                                                self.state.send(bytes).await;
                                             }
                                         }
-                                        Err(_) => {
-                                        }
                                     }
-                                    // file.content_stream = Some(file_content_stream);
+                                    Err(_) => {}
                                 }
+                                // file.content_stream = Some(file_content_stream);
                             }
-                            _ => return  Err(StreamableFileSystemErrors::None),
                         }
+                        _ => return Err(StreamableFileSystemErrors::None),
                     }
-                    Ok(())
+                }
+                Ok(())
                 //});
             }
             Operation::None => Err(StreamableFileSystemErrors::None),
             //Err("unimplimented".into()),
             Operation::Set => {
-                if let Some(state) = self.local_state.get(&state_id){
-                    let frame = SetFrame::new(Some(self.direction.clone()), Some(Operation::Set), state_id, state.location.as_bytes().to_vec());
-                    if let Ok(bytes) =
-                        self.state.encode_frame(frame.clone()).await
-                    {
+                if let Some(state) = self.local_state.get(&state_id) {
+                    let frame = SetFrame::new(
+                        Some(self.direction.clone()),
+                        Some(Operation::Set),
+                        state_id,
+                        state.location.as_bytes().to_vec(),
+                    );
+                    if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
                         self.state.send(bytes).await;
                     }
                     Ok(())
@@ -469,44 +465,49 @@ struct SetFrame {
     direction: Option<Direction>,
     operation: Option<Operation>,
     state_id: u8,
-    chunks: Vec<u8>
+    chunks: Vec<u8>,
 }
 impl SetFrame {
-    fn new(direction: Option<Direction>, operation: Option<Operation>, state_id: u8, chunks: Vec<u8>) -> SetFrame {
-        SetFrame { 
-            direction, 
-            operation, 
+    fn new(
+        direction: Option<Direction>,
+        operation: Option<Operation>,
+        state_id: u8,
+        chunks: Vec<u8>,
+    ) -> SetFrame {
+        SetFrame {
+            direction,
+            operation,
             state_id,
-            chunks 
+            chunks,
         }
     }
     fn decode(mut bytes: Vec<u8>) -> Result<SetFrame, FileFrameStatus> {
         let mut frame = SetFrame::default();
         if let Some(byte) = bytes.get(0) {
-            if let Ok(direction) = Direction::try_from_primitive(*byte){
+            if let Ok(direction) = Direction::try_from_primitive(*byte) {
                 frame.direction = Some(direction);
             } else {
-                return Err(FileFrameStatus::NotValidFrame)
+                return Err(FileFrameStatus::NotValidFrame);
             }
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
         if let Some(byte) = bytes.get(0) {
-            if let Ok(operation) = Operation::try_from_primitive(*byte){
+            if let Ok(operation) = Operation::try_from_primitive(*byte) {
                 frame.operation = Some(operation);
             } else {
-                return Err(FileFrameStatus::NotValidFrame)
+                return Err(FileFrameStatus::NotValidFrame);
             }
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
-        if let Some(byte) = bytes.get(0){
+        if let Some(byte) = bytes.get(0) {
             frame.state_id = *byte;
             bytes.remove(0);
         } else {
-            return Err(FileFrameStatus::NotValidFrame)
+            return Err(FileFrameStatus::NotValidFrame);
         }
         frame.chunks = bytes;
         Ok(frame)
