@@ -113,6 +113,7 @@ pub enum FileFrameStatus {
     FrameNoBegins,
     FrameNoEnds,
     NotValidFrame,
+    NotCorrectFrame,
     NoFrameDecoding,
     FileStreamError(FileStreamError)
 }
@@ -156,6 +157,9 @@ impl DecodableFrame for FileFrame {
         }
         if let Some(byte) = bytes.get(0) {
             if let Ok(operation) = Operation::try_from_primitive(*byte) {
+                if !matches!(operation, Operation::Set){
+                    return Err(FileFrameStatus::NotCorrectFrame);
+                }
                 frame.operation = Some(operation);
             } else {
                 return Err(FileFrameStatus::NotValidFrame);
@@ -324,13 +328,10 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                     total_bytes.extend(bytes);
                     let mut frame = self.state.create_frame_handler();
                     frame.set_chunks(self.remainder.clone());
-                    println!("about to receive");
-
                     let mut decoded_frames = Vec::new();
                     let mut regular_frames = Vec::new();
                     match frame.append_bytes_recv(&total_bytes, remainder) {
                         Ok(frames) => {
-                            println!("got a few frames");
                             for frame in &frames {
                                 let chunks = frame.get_chunks();
                                 match T::decode(chunks.clone()){
@@ -343,16 +344,17 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                         Err(e) => {
                             match e {
                                 FileFrameStatus::NotValidFrame => {
-                                                            }
+                                                                                        }
                                 FileFrameStatus::NoFrameDecoding => {
-                                                            }
+                                                                                        }
                                 FileFrameStatus::FrameNoBegins => {
-                                                            }
+                                                                                        }
                                 FileFrameStatus::FrameNoEnds => {
-                                                                let remainder = total_bytes;
-                                                                self.remainder = remainder.to_vec();
-                                                            }
+                                                                                            let remainder = total_bytes;
+                                                                                            self.remainder = remainder.to_vec();
+                                                                                        }
                                 FileFrameStatus::FileStreamError(_) => {},
+                                FileFrameStatus::NotCorrectFrame => {},
                             };
                             return Err(e);
                         },
@@ -443,16 +445,17 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
             Err(e) => {
                 match e {
                     FileFrameStatus::NotValidFrame => {
-                                                }
+                                                                }
                     FileFrameStatus::NoFrameDecoding => {
-                                                }
+                                                                }
                     FileFrameStatus::FrameNoBegins => {
-                                                }
+                                                                }
                     FileFrameStatus::FrameNoEnds => {
-                                                    let remainder = total_bytes;
-                                                    self.remainder = remainder.to_vec();
-                                                }
+                                                                    let remainder = total_bytes;
+                                                                    self.remainder = remainder.to_vec();
+                                                                }
                     FileFrameStatus::FileStreamError(_) => {},
+                    FileFrameStatus::NotCorrectFrame => {},
                 };
                 return Err(StreamableFileSystemErrors::FileFrameError(e))
             }
@@ -607,6 +610,9 @@ impl DecodableFrame for SetFrame {
         }
         if let Some(byte) = bytes.get(0) {
             if let Ok(operation) = Operation::try_from_primitive(*byte) {
+                if !matches!(operation, Operation::Set){
+                    return Err(FileFrameStatus::NotCorrectFrame);
+                }
                 frame.operation = Some(operation);
             } else {
                 return Err(FileFrameStatus::NotValidFrame);
