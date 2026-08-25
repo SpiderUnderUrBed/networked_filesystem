@@ -245,7 +245,7 @@ impl<S: Default, F> Default for RemoteFileSystem<S, F> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct LocalState {
     pub location: String,
 }
@@ -285,6 +285,20 @@ impl<S: Default, F> RemoteFileSystem<S, F> {
     }
     pub fn append_files(&mut self, file: F) {
         self.files.push(file);
+    }
+}
+impl<S: Clone, F: Clone> Clone for RemoteFileSystem<S, F> {
+    fn clone(&self) -> Self {
+        RemoteFileSystem {
+            state: self.state.clone(),
+            local_state: self.local_state.clone(),
+            direction: self.direction.clone(),
+            operation: self.operation.clone(),
+            codec: self.codec.clone(),
+            files: self.files.clone(),
+            file_handle: None,
+            remainder: self.remainder.clone(),
+        }
     }
 }
 impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
