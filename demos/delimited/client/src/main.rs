@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 filesystem.clear_files();
                 let file = FlumeFile {
                     original_location: None,
-                    final_location: "/home/spiderunderurbed/projects/tcp_fs_poc/test-output.txt"
+                    final_location: "/home/spiderunderurbed/projects/networked_filesystem/test-output.txt"
                         .to_owned(),
                     content_stream: Some(rx.clone()),
                 };
@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             //let file_path = Path::new("/home/spiderunderurbed/projects/tcp_fs_poc/test.txt");
             let file_path = Path::new(
-                "/home/spiderunderurbed/projects/tcp_fs_poc/archives/forge-1.20.6-50.1.0-installer.jar",
+                "/home/spiderunderurbed/projects/networked_filesystem/archives/forge-1.20.6-50.1.0-installer.jar",
             );
             //forge-1.20.6-50.1.0-installer.jar
             // let file = StdFile::open(file_path)?;
