@@ -157,7 +157,7 @@ impl DecodableFrame for FileFrame {
         }
         if let Some(byte) = bytes.get(0) {
             if let Ok(operation) = Operation::try_from_primitive(*byte) {
-                if !matches!(operation, Operation::Set){
+                if !matches!(operation, Operation::Move){
                     return Err(FileFrameStatus::NotCorrectFrame);
                 }
                 frame.operation = Some(operation);
