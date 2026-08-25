@@ -1,17 +1,7 @@
 use std::{
-    collections::{HashMap, VecDeque},
-    default,
-    io::Write,
-    marker::PhantomData,
-    os::unix::ffi::OsStrExt,
-    pin::Pin,
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicBool, Ordering},
-        mpsc::Receiver,
-    },
-    task::{Context, Poll},
-    vec,
+    collections::{HashMap, VecDeque}, default, error::Error, io::Write, marker::PhantomData, os::unix::ffi::OsStrExt, pin::Pin, sync::{
+        atomic::{AtomicBool, Ordering}, mpsc::Receiver, Arc, RwLock
+    }, task::{Context, Poll}, vec
 };
 
 use multer::bytes::{self, buf};
@@ -113,6 +103,8 @@ struct FileFrame {
     chunking_status: Option<ChunkingStatus>,
     chunks: Vec<u8>,
 }
+
+#[derive(Debug)]
 pub enum FileFrameStatus {
     FrameNoBegins,
     FrameNoEnds,
@@ -218,6 +210,8 @@ pub enum StreamableFileSystemErrors {
     NoStateGiven,
     IncorrectStateAsked,
     IncorrectData,
+    FileFrameError(FileFrameStatus),
+    Any(Box<dyn Error + Send + Sync>)
 }
 
 pub struct RemoteFileSystem<S, F> {
@@ -334,7 +328,7 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                                                 let _ = std::fs::File::create(location);
                                                 temp_handle = std::fs::OpenOptions::new()
                                                     .append(true)
-                                                    .open(location)
+                                                    .open(location);
                                             }
                                             self.file_handle = Some(temp_handle.unwrap());
                                         } else {
@@ -367,16 +361,21 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                                 self.remainder.extend(last_frame.get_remainder().clone());
                             }
                         }
-                        Err(e) => match e {
-                            FileFrameStatus::NotValidFrame => {}
-                            FileFrameStatus::NoFrameDecoding => {}
-                            FileFrameStatus::FrameNoBegins => {}
-                            FileFrameStatus::FrameNoEnds => {
-                                let remainder = total_bytes;
-                                self.remainder = remainder.to_vec();
-                                println!("this frame does not end");
-                            }
-                        },
+                        Err(e) => {
+                            match e {
+                                FileFrameStatus::NotValidFrame => {
+                                }
+                                FileFrameStatus::NoFrameDecoding => {
+                                }
+                                FileFrameStatus::FrameNoBegins => {
+                                }
+                                FileFrameStatus::FrameNoEnds => {
+                                    let remainder = total_bytes;
+                                    self.remainder = remainder.to_vec();
+                                }
+                            };
+                            break Err(StreamableFileSystemErrors::FileFrameError(e))
+                        }
                     }
                 }
                 Err(_) => {
@@ -390,6 +389,47 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
 impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
 // where S: StreamSender
 {
+    pub async fn send_file(&mut self, mut file: F) -> Result<(), StreamableFileSystemErrors> {
+        match self.codec {
+            Codec::Multipart => {
+                todo!()
+            }
+            // Codec::RawContinues => {
+            // }
+            Codec::Raw | Codec::RawContinues => {
+                loop {
+                    // let file_content_stream =
+                    //     file.content_stream.take().unwrap();
+
+                    match file.get_chunk().await {
+                        Ok(bytes) => {
+                            for chunk in bytes.chunks(4096) {
+                                let mut frame = FileFrame::new(
+                                    self.direction.clone(),
+                                    Operation::Move,
+                                    self.codec.clone(),
+                                    ChunkingStatus::Continues,
+                                    // Some(ESCAPE_BYTE)
+                                );
+                                frame.append_bytes_send(chunk.to_vec());
+
+                                if let Ok(bytes) =
+                                    self.state.encode_frame(frame.clone()).await
+                                {
+                                    self.state.send(bytes).await;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            return Err(StreamableFileSystemErrors::Any(e))
+                        }
+                    }
+                    // file.content_stream = Some(file_content_stream);
+                }
+            }
+            _ => return Err(StreamableFileSystemErrors::None),
+        }
+    }
     pub async fn execute_operation(
         &mut self,
         state_id: u8,
@@ -407,44 +447,7 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
                     }
                     let _ = Box::pin(self.execute_operation(state_id)).await;
                     self.operation = Operation::Move;
-                    match self.codec {
-                        Codec::Multipart => {
-                            todo!()
-                        }
-                        // Codec::RawContinues => {
-                        // }
-                        Codec::Raw | Codec::RawContinues => {
-                            loop {
-                                // let file_content_stream =
-                                //     file.content_stream.take().unwrap();
-
-                                match file.get_chunk().await {
-                                    Ok(bytes) => {
-                                        println!("got a bunch of bytes");
-                                        for chunk in bytes.chunks(4096) {
-                                            let mut frame = FileFrame::new(
-                                                self.direction.clone(),
-                                                Operation::Move,
-                                                self.codec.clone(),
-                                                ChunkingStatus::Continues,
-                                                // Some(ESCAPE_BYTE)
-                                            );
-                                            frame.append_bytes_send(chunk.to_vec());
-
-                                            if let Ok(bytes) =
-                                                self.state.encode_frame(frame.clone()).await
-                                            {
-                                                self.state.send(bytes).await;
-                                            }
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                                // file.content_stream = Some(file_content_stream);
-                            }
-                        }
-                        _ => return Err(StreamableFileSystemErrors::None),
-                    }
+                    self.send_file(file).await?;
                 }
                 Ok(())
                 //});

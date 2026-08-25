@@ -133,6 +133,7 @@ impl<T: HandleWithDelims> Handle<WithDelims> for T {
     }
 }
 
+#[derive(Clone)]
 pub struct TcpFsReceiver {
     pub tx: flume::Sender<Vec<u8>>,
     pub rx: flume::Receiver<Vec<u8>>,
@@ -180,17 +181,7 @@ impl TcpFsReceiver {
         let _ = self.tx.send(bytes);
     }
 }
-impl Clone for TcpFsReceiver {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            rx: self.rx.clone(),
-            start_delimiter: self.start_delimiter.clone(),
-            end_delimiter: self.start_delimiter.clone(),
-            escape_byte: self.escape_byte.clone(),
-        }
-    }
-}
+
 impl Default for TcpFsReceiver {
     fn default() -> Self {
         let (tx, rx) = flume::bounded(32);
@@ -204,6 +195,7 @@ impl Default for TcpFsReceiver {
     }
 }
 
+#[derive(Clone)]
 pub struct TcpFsSender {
     pub tx: flume::Sender<Vec<u8>>,
     pub rx: flume::Receiver<Vec<u8>>,
