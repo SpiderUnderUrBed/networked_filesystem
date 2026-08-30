@@ -24,7 +24,6 @@ impl Clone for FlumeFile {
 }
 impl FileSender for FlumeFile {
     async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        // let stream = self.content_stream.take().unwrap();
         if let Some(stream) = self.content_stream.take() {
             let result;
             match stream.recv_async().await {
@@ -133,7 +132,6 @@ impl<T: HandleWithDelims> Handle<WithDelims> for T {
     }
 }
 
-#[derive(Clone)]
 pub struct TcpFsReceiver {
     pub tx: flume::Sender<Vec<u8>>,
     pub rx: flume::Receiver<Vec<u8>>,
@@ -152,8 +150,9 @@ impl StreamReceiver for TcpFsReceiver {
     }
     async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
         match self.rx.recv_async().await {
-            Ok(byes) => Ok(byes),
-            Err(_) => Err(FileStreamError::Disconnect),
+
+            Ok(bytes) => { Ok(bytes) },
+            Err(e) => { Err(FileStreamError::Disconnect) },
         }
     }
 }
@@ -181,7 +180,17 @@ impl TcpFsReceiver {
         let _ = self.tx.send(bytes);
     }
 }
-
+impl Clone for TcpFsReceiver {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            rx: self.rx.clone(),
+            start_delimiter: self.start_delimiter.clone(),
+            end_delimiter: self.end_delimiter.clone(),
+            escape_byte: self.escape_byte.clone(),
+        }
+    }
+}
 impl Default for TcpFsReceiver {
     fn default() -> Self {
         let (tx, rx) = flume::bounded(32);
@@ -195,7 +204,6 @@ impl Default for TcpFsReceiver {
     }
 }
 
-#[derive(Clone)]
 pub struct TcpFsSender {
     pub tx: flume::Sender<Vec<u8>>,
     pub rx: flume::Receiver<Vec<u8>>,
@@ -204,6 +212,14 @@ pub struct TcpFsSender {
     end_delimiter: Option<Vec<u8>>,
     escape_byte: Option<u8>,
 }
+impl Clone for TcpFsSender {
+    fn clone(&self) -> Self {
+        Self { 
+            tx: self.tx.clone(), rx: self.rx.clone(), byte_array: self.byte_array.clone(), start_delimiter: self.start_delimiter.clone(), end_delimiter: self.end_delimiter.clone(), escape_byte: self.escape_byte.clone() 
+        }
+    }
+}
+
 impl Default for TcpFsSender {
     fn default() -> Self {
         let (tx, rx) = flume::unbounded();
@@ -344,7 +360,9 @@ impl FrameHandler for FrameEncoder {
                             end_pos += 1;
                             continue 'end_delims;
                         }
-                        SubsequenceStatus::FoundAt(pos) => end_pos = pos,
+                        SubsequenceStatus::FoundAt(pos) => {
+                            end_pos = pos
+                        },
                     }
                     self.remainder = self.file_chunks[end_pos..self.file_chunks.len()].to_vec();
                     self.file_chunks = self.file_chunks[0..end_pos].to_vec();
@@ -393,12 +411,15 @@ impl FrameHandler for FrameEncoder {
                             starting_offset += 1;
                             continue 'start_delims;
                         }
-                        SubsequenceStatus::FoundAt(pos) => starting_offset = pos,
+                        SubsequenceStatus::FoundAt(pos) => {
+                            starting_offset = pos
+                        },
                     }
                     self.remainder = total_bytes[..starting_offset].to_vec();
 
                     self.file_chunks =
                         total_bytes[starting_offset + starting_delimiter.len()..].to_vec();
+
                     self.collect_buffer = true;
                     let mut inner_file_frame = FrameEncoder::default();
                     inner_file_frame.starting_delimiter = self.starting_delimiter.clone();
