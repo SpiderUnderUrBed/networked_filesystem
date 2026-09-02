@@ -3,9 +3,7 @@ use std::collections::VecDeque;
 use multipeek::IteratorExt;
 
 use crate::{
-    FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameHandler, Handle, SetFrame,
-    StreamReceiver, StreamSender,
-    delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter},
+    delimited_commons::subsequence::{find_subsequence_by_windows_iter, SubsequenceStatus}, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameHandler, Handle, SetFrame, StreamReceiver, StreamSender, TransportRecvError
 };
 
 pub struct FlumeFile {
@@ -22,8 +20,9 @@ impl Clone for FlumeFile {
         }
     }
 }
+
 impl FileSender for FlumeFile {
-    async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_chunk(&mut self) -> Result<Vec<u8>, TransportRecvError> {
         if let Some(stream) = self.content_stream.take() {
             let result;
             match stream.recv_async().await {
@@ -31,13 +30,18 @@ impl FileSender for FlumeFile {
                     result = bytes;
                 }
                 Err(e) => {
-                    return Err(Box::new(e));
+                    // return Err(Box::new(e));
+                    match e {
+                        flume::RecvError::Disconnected => {
+                            return Err(TransportRecvError::Disconnected)
+                        },
+                    }
                 }
             }
             self.content_stream = Some(stream);
             return Ok(result);
         } else {
-            Err("no stream".into())
+            Err(TransportRecvError::NoStream)
         }
     }
 

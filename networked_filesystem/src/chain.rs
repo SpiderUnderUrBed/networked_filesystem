@@ -89,7 +89,9 @@ where
                 })?;
             },
             Err(e) => {
-                return Err(StreamableFileSystemErrors::Unknown);
+                if !matches!(e, FileFrameStatus::NotCorrectFrame){
+                    return Err(StreamableFileSystemErrors::Unknown);
+                }
             },
         }
         self.tail.execute(state_id, bytes, fs).await

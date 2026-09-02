@@ -107,8 +107,16 @@ pub struct FileFrame {
     direction: Option<Direction>,
     operation: Option<Operation>,
     codec: Option<Codec>,
-    chunking_status: Option<ChunkingStatus>,
+    pub chunking_status: Option<ChunkingStatus>,
     pub chunks: Vec<u8>,
+}
+
+
+#[derive(Debug)]
+pub enum TransportRecvError {
+    Disconnected,
+    Lagged(usize),
+    NoStream
 }
 
 #[derive(Debug)]
@@ -253,7 +261,7 @@ pub trait StreamSender {
 }
 
 pub trait FileSender {
-    async fn get_chunk(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
+    async fn get_chunk(&mut self) -> Result<Vec<u8>, TransportRecvError>;
     fn get_location(&self) -> String;
 }
 
@@ -264,6 +272,7 @@ pub enum StreamableFileSystemErrors {
     IncorrectStateAsked,
     IncorrectData,
     Unknown,
+    TransportRecvError(TransportRecvError),
     Any(Box<dyn Error + Send + Sync>)
 }
 
@@ -457,7 +466,7 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
                             }
                         }
                         Err(e) => {
-                            return Err(StreamableFileSystemErrors::Any(e))
+                            return Err(StreamableFileSystemErrors::TransportRecvError(e))
                         }
                     }
                 }
@@ -548,7 +557,7 @@ impl FrameCommons for SetFrame {
         }
         if let Some(byte) = bytes.get(0) {
             if let Ok(operation) = Operation::try_from_primitive(*byte) {
-                if !matches!(operation, Operation::Move){
+                if !matches!(operation, Operation::Set){
                     return Err(FileFrameStatus::NotCorrectFrame);
                 }
                 frame.operation = Some(operation);
