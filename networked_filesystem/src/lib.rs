@@ -36,7 +36,8 @@ pub enum Direction {
 pub enum Operation {
     Move = 0,
     Set = 1,
-    Ls = 3,
+    Ls = 2,
+    Eof = 3,
     // LsWithRange { start: u64, end: u64 },
     None = 4,
 }
@@ -152,12 +153,11 @@ impl FileFrame {
     }
     pub fn write_at_location<S, F>(&mut self, fs: &mut RemoteFileSystem<S, F>, location: String) -> Result<(), FileHandleStatus>{
         if fs.file_handle.is_none() {
-            fs.location_cursor = Some(location.clone());
             let mut temp_handle = std::fs::OpenOptions::new()
                 .truncate(true)
                 .append(true)
                 .open(&location);
-            if let Err(_) = temp_handle {
+            if let Err(e) = temp_handle {
                 let _ = std::fs::File::create(&location);
                 temp_handle = std::fs::OpenOptions::new()
                     .append(true)
@@ -285,16 +285,17 @@ pub struct LocalState {
 pub struct RemoteFileSystem<S, F> {
     state: S,
     local_state: HashMap<u8, LocalState>,
-    location_cursor: Option<String>,
     direction: Direction,
     operation: Operation,
+    unique_operation_event: (watch::Sender<Operation>, watch::Receiver<Operation>),
     codec: Codec,
     files: Vec<F>,
     file_handle: Option<StdFile>,
-    pub remainder: Vec<u8>,
+    remainder: Vec<u8>,
 }
 impl<S: Default, F> Default for RemoteFileSystem<S, F> {
     fn default() -> Self {
+        let (watch_tx, watch_rx) = watch::channel(Operation::None);
         Self {
             state: S::default(),
             local_state: HashMap::new(),
@@ -304,37 +305,23 @@ impl<S: Default, F> Default for RemoteFileSystem<S, F> {
             files: Vec::new(),
             file_handle: None,
             remainder: Vec::new(),
-            location_cursor: None,
+            unique_operation_event: (watch_tx, watch_rx),
         }
     }
 }
 impl<S: Clone, F: Clone> Clone for RemoteFileSystem<S, F>{
     fn clone(&self) -> Self {
+        let (watch_tx, watch_rx) = watch::channel(Operation::None);
         Self { 
             state: self.state.clone(), 
             local_state: self.local_state.clone(), 
-            location_cursor: self.location_cursor.clone(), 
             direction: self.direction.clone(), 
             operation: self.operation.clone(), 
             codec: self.codec.clone(), files: self.files.clone(), 
-            file_handle: {
-                if let Some(location) = &self.location_cursor {
-                    let mut temp_handle = std::fs::OpenOptions::new()
-                        .truncate(true)
-                        .append(true)
-                        .open(location);
-                    if let Err(_) = temp_handle {
-                        let _ = std::fs::File::create(&location);
-                        temp_handle = std::fs::OpenOptions::new()
-                            .append(true)
-                            .open(location)
-                    }
-                    Some(temp_handle.unwrap())
-                } else {
-                    None
-                }
-            }, 
-            remainder: self.remainder.clone() }
+            file_handle: None,
+            remainder: self.remainder.clone(),
+            unique_operation_event: (watch_tx, watch_rx)
+        }
     }
 }
 
@@ -373,6 +360,9 @@ impl<S: Default, F> RemoteFileSystem<S, F> {
     }
     pub fn append_files(&mut self, file: F) {
         self.files.push(file);
+    }
+    pub fn get_operation_event(&self) -> watch::Receiver<Operation> {
+        self.unique_operation_event.1.clone()
     }
 }
 impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
@@ -478,11 +468,12 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
         &mut self,
         state_id: u8,
     ) -> Result<(), StreamableFileSystemErrors> {
+        let _ = self.unique_operation_event.0.send(self.operation.clone());
         match self.operation {
             Operation::Move => {
                 // return Box::pin(async move {
                 let mut files = std::mem::take(&mut self.files);
-                for mut file in files.drain(..) {
+                for file in files.drain(..) {
                     self.operation = Operation::Set;
                     if let Some(state) = self.local_state.get_mut(&state_id) {
                         state.location = file.get_location();
@@ -491,7 +482,15 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
                     }
                     let _ = Box::pin(self.execute_operation(state_id)).await;
                     self.operation = Operation::Move;
-                    self.send_file(file).await?;
+                    println!("before sending file");
+                    if let Err(e) = self.send_file(file).await {
+                        println!("done sending file");
+                        if matches!(e, StreamableFileSystemErrors::TransportRecvError(TransportRecvError::Disconnected)){
+                            self.operation = Operation::Eof;
+                            let _ = Box::pin(self.execute_operation(state_id)).await;
+                            println!("done sending eof");
+                        }
+                    }
                 }
                 Ok(())
             },
@@ -501,7 +500,6 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
                 if let Some(state) = self.local_state.get(&state_id) {
                     let frame = SetFrame::new(
                         Some(self.direction.clone()),
-                        Some(Operation::Set),
                         state_id,
                         state.location.as_bytes().to_vec(),
                     );
@@ -515,6 +513,15 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F>
             }
             Operation::Ls => {
                 return Err(StreamableFileSystemErrors::None);
+            },
+            Operation::Eof => {
+                let frame = EofFrame::new(
+                    Some(self.direction.clone())
+                );
+                if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
+                    self.state.send(bytes).await;
+                }
+                Ok(())
             }
         }
     }
@@ -582,16 +589,62 @@ impl FrameCommons for SetFrame {
 impl SetFrame {
     fn new(
         direction: Option<Direction>,
-        operation: Option<Operation>,
         state_id: u8,
         chunks: Vec<u8>,
     ) -> SetFrame {
         SetFrame {
             direction,
-            operation,
+            operation: Some(Operation::Set),
             state_id,
             chunks,
         }
     }
 
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct EofFrame {
+    direction: Option<Direction>,
+    operation: Option<Operation>,
+}
+impl EofFrame {
+    fn new(direction: Option<Direction>) -> EofFrame {
+        EofFrame { direction, operation: Some(Operation::Eof) }
+    }
+}
+impl FrameCommons for EofFrame {
+    type Output = EofFrame;
+    async fn handle<S, F>(_output: EofFrame, _state_id: u8, fs: &mut RemoteFileSystem<S, F>) -> Result<(), FileHandleStatus> {
+        let mut file_handle = fs.file_handle.take().unwrap();
+        let _ = file_handle.flush();
+        let _ = file_handle.sync_all();
+        Ok(())
+    }
+    fn decode(mut bytes: Vec<u8>) -> Result<EofFrame, FileFrameStatus> {
+        let mut frame = EofFrame::default();
+        if let Some(byte) = bytes.get(0) {
+            if let Ok(direction) = Direction::try_from_primitive(*byte) {
+                frame.direction = Some(direction);
+            } else {
+                return Err(FileFrameStatus::NotValidFrame);
+            }
+            bytes.remove(0);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(byte) = bytes.get(0) {
+            if let Ok(operation) = Operation::try_from_primitive(*byte) {
+                if !matches!(operation, Operation::Eof){
+                    return Err(FileFrameStatus::NotCorrectFrame);
+                }
+                frame.operation = Some(operation);
+            } else {
+                return Err(FileFrameStatus::NotValidFrame);
+            }
+            bytes.remove(0);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        Ok(frame)
+    }
 }

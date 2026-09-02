@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use multipeek::IteratorExt;
 
 use crate::{
-    delimited_commons::subsequence::{find_subsequence_by_windows_iter, SubsequenceStatus}, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameHandler, Handle, SetFrame, StreamReceiver, StreamSender, TransportRecvError
+    delimited_commons::subsequence::{find_subsequence_by_windows_iter, SubsequenceStatus}, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameHandler, Handle, SetFrame, StreamReceiver, StreamSender, TransportRecvError
 };
 
 pub struct FlumeFile {
@@ -121,6 +121,30 @@ impl HandleWithDelims for SetFrame {
         chunks_with_state.extend(self.chunks.clone());
         let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
         bytes_frame = encoder.encode_bytes(bytes_frame, chunks_with_state);
+        Ok(bytes_frame)
+    }
+}
+
+impl HandleWithDelims for EofFrame {
+    fn to_bytes(
+        &self,
+        escape_byte: Option<u8>,
+        starting_delimiter: Option<Vec<u8>>,
+        ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        let mut bytes_frame = Vec::new();
+        if let Some(ref direction) = self.direction {
+            bytes_frame.push(direction.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(ref operation) = self.operation {
+            bytes_frame.push(operation.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
+        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
         Ok(bytes_frame)
     }
 }
