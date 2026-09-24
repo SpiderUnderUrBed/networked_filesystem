@@ -129,11 +129,9 @@ where
             Ok(output) => {
                 if let Ok(direction) = output.get_direction() {
                     if direction == fs.direction {
-                        //println!("ignoring frame");
                         return Err(StreamableFileSystemErrors::IncorrectData);
                     }
                 } else {
-                    println!("no direction on frame");
                     return Err(StreamableFileSystemErrors::IncorrectData);
                 }
                 (self.f)(state_id, output, fs).await.map_err(|e| match e {
@@ -188,7 +186,7 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
                         let _ = self
                             .list
                             .execute(state_id, chunks.clone(), &mut self.fs)
-                            .await;
+                            .await?;
                     }
                     if let Some(last_frame) = frames.iter().last() {
                         self.fs.remainder.extend(last_frame.get_remainder().clone());
@@ -220,9 +218,9 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
         loop {
             match self.fs.state.get_chunk().await {
                 Ok(bytes) => {
-                    self.decode_bytes(state_id, bytes, remainder).await?
+                    self.decode_bytes(state_id, bytes, remainder).await?;
                 }
-                Err(e) => {
+                Err(_) => {
                     return Err(StreamableFileSystemErrors::Unknown);
                 }
             }

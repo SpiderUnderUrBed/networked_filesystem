@@ -37,6 +37,7 @@ pub enum Operation {
     // LsWithRange { start: u64, end: u64 },
     Drain = 4,
     None = 5,
+    Acknowlage = 6,
 }
 
 #[derive(Clone, TryFromPrimitive, Debug)]
@@ -298,6 +299,7 @@ pub trait BidirectionalStream: StreamSender + StreamReceiver {}
 pub trait FileSender {
     async fn get_chunk(&mut self) -> Result<Vec<u8>, TransportRecvError>;
     fn get_location(&self) -> String;
+    fn get_state(&self) -> u8;
 }
 
 #[derive(Debug)]
@@ -536,9 +538,12 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
                                 }
                             }
                         }
-                        Err(e) => return Err(StreamableFileSystemErrors::TransportRecvError(e)),
+                        Err(e) => {
+                            return Err(StreamableFileSystemErrors::TransportRecvError(e))
+                        },
                     }
                 }
+
             }
             _ => return Err(StreamableFileSystemErrors::None),
         }
@@ -567,9 +572,13 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
         let _ = self.unique_operation_event.0.send(self.operation.clone());
         match self.operation {
             Operation::Move => {
-                // return Box::pin(async move {
-                let mut files = std::mem::take(&mut self.files);
-                for file in files.drain(..) {
+                    let (extracted, kept): (Vec<F>, Vec<F>) = std::mem::take(&mut self.files)
+                        .into_iter()
+                        .partition(|f| f.get_state() == state_id);
+
+                    self.files = kept;
+
+                    for file in extracted {
                     self.operation = Operation::Set;
                     if let Some(state) = self.local_state.get_mut(&state_id) {
                         state.location = file.get_location();
@@ -614,6 +623,9 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
                 Ok(())
             }
             Operation::Drain => return Err(StreamableFileSystemErrors::None),
+            Operation::Acknowlage => {
+                return Err(StreamableFileSystemErrors::None)
+            },
         }
     }
 }
@@ -908,6 +920,13 @@ pub async fn create_bidirectional_handler(
                 }
                 Ok(())
             }
+            Operation::Acknowlage => {
+                  let frame = AcknowlageFrame::new(Some(self.direction.clone()));
+                if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
+                    let _ = self.state.send(bytes).await;
+                }
+                Ok(())
+            },
         }
     }
 }
@@ -994,6 +1013,68 @@ impl SetFrame {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct AcknowlageFrame {
+    direction: Option<Direction>,
+    operation: Option<Operation>,
+}
+
+impl AcknowlageFrame {
+    fn new(direction: Option<Direction>) -> AcknowlageFrame {
+        AcknowlageFrame {
+            direction,
+            operation: Some(Operation::Acknowlage),
+        }
+    }
+    pub fn to_bytes_with_delims<S, F>(filesystem: RemoteFileSystem<S, F>) -> Result<Vec<u8>, FileFrameStatus> 
+        where S: StateDelims
+    {
+        let state = filesystem.state;
+        HandleWithDelims::to_bytes(&AcknowlageFrame::new(Some(filesystem.direction)), state.get_escape_byte(), state.get_starting_delims(), state.get_ending_delims())
+    }
+}
+impl FrameCommons for AcknowlageFrame {
+    fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
+        Ok(self.direction.clone().unwrap())
+    }
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
+        Ok(self.operation.clone().unwrap())
+    }
+}
+
+impl Decodable for AcknowlageFrame {
+    type Output = Self;
+
+    fn decode(mut bytes: Vec<u8>) -> Result<Self::Output, FileFrameStatus> {
+        let mut frame = AcknowlageFrame::default();
+        if let Some(byte) = bytes.get(0) {
+            if let Ok(direction) = Direction::try_from_primitive(*byte) {
+                frame.direction = Some(direction);
+            } else {
+                return Err(FileFrameStatus::NotValidFrame);
+            }
+            bytes.remove(0);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(byte) = bytes.get(0) {
+            if let Ok(operation) = Operation::try_from_primitive(*byte) {
+                if !matches!(operation, Operation::Acknowlage) {
+                    return Err(FileFrameStatus::NotCorrectFrame);
+                }
+                frame.operation = Some(operation);
+            } else {
+                return Err(FileFrameStatus::NotValidFrame);
+            }
+            bytes.remove(0);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        Ok(frame)
+    }
+}
+
+
+#[derive(Debug, Default, Clone)]
 pub struct EofFrame {
     direction: Option<Direction>,
     operation: Option<Operation>,
@@ -1010,9 +1091,10 @@ impl EofFrame {
         _state_id: u8,
         fs: &mut RemoteFileSystem<S, F>,
     ) -> Result<(), FileHandleStatus> {
-        let mut file_handle = fs.file_handle.take().unwrap();
-        let _ = file_handle.flush();
-        let _ = file_handle.sync_all();
+        if let Some(mut file_handle) = fs.file_handle.take(){
+            let _ = file_handle.flush();
+            let _ = file_handle.sync_all();
+        }
         Ok(())
     }
     pub fn raw_output_with_delims<S: StateDelims + StreamSender, F>(
@@ -1027,7 +1109,7 @@ impl EofFrame {
         fs: &mut RemoteFileSystem<S, F>,
     ) -> Result<(), FileHandleStatus> {
         let bytes= EofFrame::raw_output_with_delims(fs);
-        fs.state.send(bytes).await;
+        let _ = fs.state.send(bytes).await;
         Ok(())
     }
 }
@@ -1084,6 +1166,7 @@ impl FrameCommons for DrainFrame {
         Ok(self.operation.clone().unwrap())
     }
 }
+
 impl DrainFrame {
     fn new(direction: Option<Direction>) -> DrainFrame {
         DrainFrame {
@@ -1110,7 +1193,7 @@ impl DrainFrame {
 >(
     _output: DrainFrame,
     _state_id: u8,
-    fs: &mut RemoteFileSystem<S, F>,
+    fs: RemoteFileSystem<S, F>,
     rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
     tx: C,
 ) -> Result<(), FileHandleStatus>

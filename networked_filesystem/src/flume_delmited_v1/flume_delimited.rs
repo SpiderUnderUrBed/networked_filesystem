@@ -4,12 +4,13 @@ use async_trait::async_trait;
 use multipeek::IteratorExt;
 
 use crate::{
-    delimited_commons::subsequence::{find_subsequence_by_windows_iter, SubsequenceStatus}, BidirectionalStream, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, Handle, SetFrame, StateDelims, StreamReceiver, StreamSender, TransportRecvError
+    AcknowlageFrame, BidirectionalStream, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, Handle, SetFrame, StateDelims, StreamReceiver, StreamSender, TransportRecvError, delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter}
 };
 use crate::Direction;
 use crate::Operation;
 
 pub struct FlumeFile {
+    pub state_id: u8,
     pub original_location: Option<String>,
     pub final_location: String,
     pub content_stream: Option<flume::Receiver<Vec<u8>>>,
@@ -20,6 +21,7 @@ impl Clone for FlumeFile {
             original_location: self.original_location.clone(),
             final_location: self.final_location.clone(),
             content_stream: self.content_stream.as_ref().map(|stream| stream.clone()),
+            state_id: self.state_id.clone(),
         }
     }
 }
@@ -50,6 +52,10 @@ impl FileSender for FlumeFile {
 
     fn get_location(&self) -> String {
         self.final_location.clone()
+    }
+    
+    fn get_state(&self) -> u8 {
+        self.state_id
     }
 }
 
@@ -152,6 +158,30 @@ impl HandleWithDelims for EofFrame {
     }
 }
 impl HandleWithDelims for DrainFrame {
+    fn to_bytes(
+        &self,
+        escape_byte: Option<u8>,
+        starting_delimiter: Option<Vec<u8>>,
+        ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        let mut bytes_frame = Vec::new();
+        if let Some(ref direction) = self.direction {
+            bytes_frame.push(direction.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(ref operation) = self.operation {
+            bytes_frame.push(operation.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
+        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
+        Ok(bytes_frame)
+    }
+}
+
+impl HandleWithDelims for AcknowlageFrame {
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,

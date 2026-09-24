@@ -95,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 filesystem.clear_files();
                 let file = FlumeFile {
+                    state_id: 0,
                     original_location: None,
                     final_location: "/home/spiderunderurbed/projects/networked_filesystem/test-output.txt"
                         .to_owned(),
