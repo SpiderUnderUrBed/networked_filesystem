@@ -12,7 +12,7 @@ use tokio::{sync::watch};
 
 pub use flume_delmited_v1::*;
 
-use crate::flume_delmited_v1::flume_delimited::{HandleWithDelims};
+use crate::flume_delmited_v1::flume_delimited::{ConvertWithDelims};
 
 pub mod chain;
 mod delimited_commons;
@@ -80,13 +80,13 @@ pub trait FrameHandler {
     fn get_chunks(&self) -> Vec<u8>;
 }
 
-pub trait HandleWithLength {
+pub trait ConvetWithLength {
     fn to_bytes(&self) -> Result<Vec<u8>, FileFrameStatus>;
 }
 
 pub struct WithLength;
 
-pub trait Handle<W> {
+pub trait Convert<W> {
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
@@ -95,14 +95,14 @@ pub trait Handle<W> {
     ) -> Result<Vec<u8>, FileFrameStatus>;
 }
 
-impl<T: HandleWithLength> Handle<WithLength> for T {
+impl<T: ConvetWithLength> Convert<WithLength> for T {
     fn to_bytes(
         &self,
         _escape_byte: Option<u8>,
         _starting_delimiter: Option<Vec<u8>>,
         _ending_delimiter: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, FileFrameStatus> {
-        HandleWithLength::to_bytes(self)
+        ConvetWithLength::to_bytes(self)
     }
 }
 #[derive(Default, Clone, Debug)]
@@ -281,7 +281,7 @@ pub enum FileStreamError {
 pub trait StreamSender {
     async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
-        S: Handle<W> + Send;
+        S: Convert<W> + Send;
     async fn send(&mut self, bytes: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
@@ -682,7 +682,7 @@ impl<T: Send + 'static> ChannelSend<T> for flume::Sender<T> {
     }
 }
 
-impl<S: BidirectionalStream + Default + Send + StateDelims, F: FileSender + Send> RemoteFileSystem<S, F> {
+impl<S: BidirectionalStream + Default + Send, F: FileSender + Send> RemoteFileSystem<S, F> {
 pub async fn receive_operation_bidirectionally(
     &mut self,
     fs_state_id: u8,
@@ -765,7 +765,7 @@ pub async fn receive_operation_bidirectionally(
                                         })?;
                                     // return Err(StreamableFileSystemErrors::NoFrameFound(chunks));
                                 } else if let Ok(drain_frame) = DrainFrame::decode(chunks) {
-                                    DrainFrame::handle_with_delims(
+                                    DrainFrame::handle(
                                         drain_frame,
                                         fs_state_id,
                                         self,
@@ -1025,11 +1025,11 @@ impl AcknowlageFrame {
             operation: Some(Operation::Acknowlage),
         }
     }
-    pub fn to_bytes_with_delims<S, F>(filesystem: RemoteFileSystem<S, F>) -> Result<Vec<u8>, FileFrameStatus> 
+    pub fn to_bytes<S, F>(filesystem: RemoteFileSystem<S, F>) -> Result<Vec<u8>, FileFrameStatus> 
         where S: StateDelims
     {
         let state = filesystem.state;
-        HandleWithDelims::to_bytes(&AcknowlageFrame::new(Some(filesystem.direction)), state.get_escape_byte(), state.get_starting_delims(), state.get_ending_delims())
+        ConvertWithDelims::to_bytes(&AcknowlageFrame::new(Some(filesystem.direction)), state.get_escape_byte(), state.get_starting_delims(), state.get_ending_delims())
     }
 }
 impl FrameCommons for AcknowlageFrame {
@@ -1101,7 +1101,7 @@ impl EofFrame {
          fs: &mut RemoteFileSystem<S, F>,
     ) -> Vec<u8> {
         let frame = EofFrame::new(Some(fs.direction.clone()));
-        let bytes = HandleWithDelims::to_bytes(&frame, fs.state.get_escape_byte(), fs.state.get_starting_delims(), fs.state.get_ending_delims())
+        let bytes = ConvertWithDelims::to_bytes(&frame, fs.state.get_escape_byte(), fs.state.get_starting_delims(), fs.state.get_ending_delims())
             .unwrap();
         bytes
     }
@@ -1153,16 +1153,54 @@ impl Decodable for EofFrame {
     }
 }
 
+pub struct WithDelims;
+pub struct WithoutDelims;
+
+#[async_trait]
+pub trait FrameWrite<W>: BidirectionalStream + Sized + Send {
+    async fn frame_write<F: Send>(
+        fs: &mut RemoteFileSystem<Self, F>,
+        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+    ) -> Result<(), FileHandleStatus>;
+}
+
+#[async_trait]
+impl<S> FrameWrite<WithDelims> for S
+where
+    S: BidirectionalStream + StateDelims + Send,
+{
+    async fn frame_write<F: Send>(
+        fs: &mut RemoteFileSystem<S, F>,
+        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+    ) -> Result<(), FileHandleStatus> {
+        DrainFrame::write_from_stream_with_delims(fs, rx).await
+    }
+}
+
+#[async_trait]
+impl<S> FrameWrite<WithoutDelims> for S
+where
+    S: BidirectionalStream + Send,
+{
+    async fn frame_write<F: Send>(
+        _fs: &mut RemoteFileSystem<S, F>,
+        _rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+    ) -> Result<(), FileHandleStatus> {
+        todo!()
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct DrainFrame {
     direction: Option<Direction>,
     operation: Option<Operation>,
 }
+
 impl FrameCommons for DrainFrame {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
         Ok(self.direction.clone().unwrap())
     }
-    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
         Ok(self.operation.clone().unwrap())
     }
 }
@@ -1175,123 +1213,123 @@ impl DrainFrame {
         }
     }
 
-    pub async fn handle_with_delims<
-        S: BidirectionalStream + StateDelims,
-        F,
-    >(
-        output: DrainFrame,
-        state_id: u8,
-        fs: &mut RemoteFileSystem<S, F>,
-        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
-    ) -> Result<(), FileHandleStatus> {
-        DrainFrame::write_from_stream_with_delims(output, state_id, fs, rx).await
-    }
-    pub async fn write_from_custom_stream_with_delims<
-    S: BidirectionalStream + StateDelims,
-    F,
-    C: ChannelSend<Vec<u8>>,
->(
-    _output: DrainFrame,
-    _state_id: u8,
-    fs: RemoteFileSystem<S, F>,
-    rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
-    tx: C,
-) -> Result<(), FileHandleStatus>
-where
-    C::Error: std::error::Error + Send + Sync + 'static,
-{
-    if rx.is_none() {
-        return Err(FileHandleStatus::IncorrectData);
-    }
-
-    let rx = rx.take().unwrap();
-
-    loop {
-        if let Some(bytes) = rx.next().await {
-            let mut frame = FileFrame::new(
-                fs.direction.clone(),
-                Operation::Move,
-                Codec::RawContinues,
-                ChunkingStatus::Continues,
-            );
-            frame.append_bytes_send(bytes);
-            let completed_frame = HandleWithDelims::to_bytes(
-                &frame,
-                fs.state.get_escape_byte(),
-                fs.state.get_starting_delims(),
-                fs.state.get_ending_delims(),
-            )
-            .unwrap();
-
-            if let Err(e) = tx.send(completed_frame).await {
-                return Err(FileHandleStatus::Any(Box::new(e)));
-            }
-        } else {
-            let frame = EofFrame::new(Some(fs.direction.clone()));
-            let completed_frame = HandleWithDelims::to_bytes(
-                &frame,
-                fs.state.get_escape_byte(),
-                fs.state.get_starting_delims(),
-                fs.state.get_ending_delims(),
-            )
-            .unwrap();
-
-            if let Err(e) = tx.send(completed_frame).await {
-                println!("failed to send EOF frame: {:#?}", e);
-            }
-            return Ok(());
-        }
-    }
-}
-    pub async fn write_from_stream_with_delims<
-        S: BidirectionalStream + StateDelims,
-        F,
-    >(
+    pub async fn handle<W, S, F>(
         _output: DrainFrame,
         _state_id: u8,
         fs: &mut RemoteFileSystem<S, F>,
         rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
-    ) -> Result<(), FileHandleStatus> {
-        if rx.is_some() {
-            let rx = rx.take().unwrap();
-            loop {
-                if let Some(bytes) = rx.next().await {
-                    let mut frame = FileFrame::new(
-                        fs.direction.clone(),
-                        Operation::Move,
-                        Codec::RawContinues,
-                        ChunkingStatus::Continues,
-                    );
-                    frame.append_bytes_send(bytes);
-                    let completed_frame = HandleWithDelims::to_bytes(
-                                &frame,
-                                fs.state.get_escape_byte(),
-                                fs.state.get_starting_delims(),
-                                fs.state.get_ending_delims(),
-                            )
-                            .unwrap();
-                    if let Err(e) = fs.state.send(completed_frame).await{
-                        println!("{:#?}", e);
-                    }
-                } else {
-                    let frame = EofFrame::new(Some(fs.direction.clone()));
-                    let completed_frame = HandleWithDelims::to_bytes(
-                                &frame,
-                                fs.state.get_escape_byte(),
-                                fs.state.get_starting_delims(),
-                                fs.state.get_ending_delims(),
-                            ).unwrap();
-                    if let Err(e) = fs.state.send(completed_frame).await{
-                        println!("{:#?}", e);
-                    }
-                    break Ok(());
+    ) -> Result<(), FileHandleStatus>
+    where
+        S: FrameWrite<W>,
+        F: Send,
+    {
+        S::frame_write(fs, rx).await
+    }
+
+    pub async fn write_from_custom_stream_with_delims<S, F, C>(
+        _output: DrainFrame,
+        _state_id: u8,
+        fs: RemoteFileSystem<S, F>,
+        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+        tx: C,
+    ) -> Result<(), FileHandleStatus>
+    where
+        S: BidirectionalStream + StateDelims,
+        C: ChannelSend<Vec<u8>>,
+        C::Error: std::error::Error + Send + Sync + 'static,
+    {
+        let rx = match rx.take() {
+            Some(rx) => rx,
+            None => return Err(FileHandleStatus::IncorrectData),
+        };
+
+        loop {
+            if let Some(bytes) = rx.next().await {
+                let mut frame = FileFrame::new(
+                    fs.direction.clone(),
+                    Operation::Move,
+                    Codec::RawContinues,
+                    ChunkingStatus::Continues,
+                );
+                frame.append_bytes_send(bytes);
+                let completed_frame = ConvertWithDelims::to_bytes(
+                    &frame,
+                    fs.state.get_escape_byte(),
+                    fs.state.get_starting_delims(),
+                    fs.state.get_ending_delims(),
+                )
+                .unwrap();
+
+                if let Err(e) = tx.send(completed_frame).await {
+                    return Err(FileHandleStatus::Any(Box::new(e)));
                 }
+            } else {
+                let frame = EofFrame::new(Some(fs.direction.clone()));
+                let completed_frame = ConvertWithDelims::to_bytes(
+                    &frame,
+                    fs.state.get_escape_byte(),
+                    fs.state.get_starting_delims(),
+                    fs.state.get_ending_delims(),
+                )
+                .unwrap();
+
+                if let Err(e) = tx.send(completed_frame).await {
+                    println!("failed to send EOF frame: {:#?}", e);
+                }
+                return Ok(());
             }
-        } else {
-            Err(FileHandleStatus::IncorrectData)
+        }
+    }
+
+    pub async fn write_from_stream_with_delims<S, F>(
+        fs: &mut RemoteFileSystem<S, F>,
+        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+    ) -> Result<(), FileHandleStatus>
+    where
+        S: BidirectionalStream + StateDelims,
+    {
+        let rx = match rx.take() {
+            Some(rx) => rx,
+            None => return Err(FileHandleStatus::IncorrectData),
+        };
+
+        loop {
+            if let Some(bytes) = rx.next().await {
+                let mut frame = FileFrame::new(
+                    fs.direction.clone(),
+                    Operation::Move,
+                    Codec::RawContinues,
+                    ChunkingStatus::Continues,
+                );
+                frame.append_bytes_send(bytes);
+                let completed_frame = ConvertWithDelims::to_bytes(
+                    &frame,
+                    fs.state.get_escape_byte(),
+                    fs.state.get_starting_delims(),
+                    fs.state.get_ending_delims(),
+                )
+                .unwrap();
+                if let Err(e) = fs.state.send(completed_frame).await {
+                    println!("{:#?}", e);
+                }
+            } else {
+                let frame = EofFrame::new(Some(fs.direction.clone()));
+                let completed_frame = ConvertWithDelims::to_bytes(
+                    &frame,
+                    fs.state.get_escape_byte(),
+                    fs.state.get_starting_delims(),
+                    fs.state.get_ending_delims(),
+                )
+                .unwrap();
+                if let Err(e) = fs.state.send(completed_frame).await {
+                    println!("{:#?}", e);
+                }
+                break Ok(());
+            }
         }
     }
 }
+
 impl Decodable for DrainFrame {
     type Output = DrainFrame;
 

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use multipeek::IteratorExt;
 
 use crate::{
-    AcknowlageFrame, BidirectionalStream, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, Handle, SetFrame, StateDelims, StreamReceiver, StreamSender, TransportRecvError, delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter}
+    AcknowlageFrame, BidirectionalStream, Convert, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StateDelims, StreamReceiver, StreamSender, TransportRecvError, delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter}
 };
 use crate::Direction;
 use crate::Operation;
@@ -61,7 +61,7 @@ impl FileSender for FlumeFile {
 
 pub struct WithDelims;
 
-pub trait HandleWithDelims {
+pub trait ConvertWithDelims {
     // type FrameOutput;
     fn to_bytes(
         &self,
@@ -71,7 +71,7 @@ pub trait HandleWithDelims {
     ) -> Result<Vec<u8>, FileFrameStatus>;
     //    fn create_frame_handler() -> Self::FrameOutput;
 }
-impl HandleWithDelims for FileFrame {
+impl ConvertWithDelims for FileFrame {
     // type FrameOutput = FrameEncoder;
     fn to_bytes(
         &self,
@@ -107,7 +107,7 @@ impl HandleWithDelims for FileFrame {
     }
 }
 
-impl HandleWithDelims for SetFrame {
+impl ConvertWithDelims for SetFrame {
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
@@ -134,7 +134,7 @@ impl HandleWithDelims for SetFrame {
     }
 }
 
-impl HandleWithDelims for EofFrame {
+impl ConvertWithDelims for EofFrame {
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
@@ -157,31 +157,7 @@ impl HandleWithDelims for EofFrame {
         Ok(bytes_frame)
     }
 }
-impl HandleWithDelims for DrainFrame {
-    fn to_bytes(
-        &self,
-        escape_byte: Option<u8>,
-        starting_delimiter: Option<Vec<u8>>,
-        ending_delimiter: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, FileFrameStatus> {
-        let mut bytes_frame = Vec::new();
-        if let Some(ref direction) = self.direction {
-            bytes_frame.push(direction.clone() as u8);
-        } else {
-            return Err(FileFrameStatus::NotValidFrame);
-        }
-        if let Some(ref operation) = self.operation {
-            bytes_frame.push(operation.clone() as u8);
-        } else {
-            return Err(FileFrameStatus::NotValidFrame);
-        }
-        let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
-        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
-        Ok(bytes_frame)
-    }
-}
-
-impl HandleWithDelims for AcknowlageFrame {
+impl ConvertWithDelims for DrainFrame {
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
@@ -205,14 +181,38 @@ impl HandleWithDelims for AcknowlageFrame {
     }
 }
 
-impl<T: HandleWithDelims> Handle<WithDelims> for T {
+impl ConvertWithDelims for AcknowlageFrame {
     fn to_bytes(
         &self,
         escape_byte: Option<u8>,
         starting_delimiter: Option<Vec<u8>>,
         ending_delimiter: Option<Vec<u8>>,
     ) -> Result<Vec<u8>, FileFrameStatus> {
-        HandleWithDelims::to_bytes(self, escape_byte, starting_delimiter, ending_delimiter)
+        let mut bytes_frame = Vec::new();
+        if let Some(ref direction) = self.direction {
+            bytes_frame.push(direction.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(ref operation) = self.operation {
+            bytes_frame.push(operation.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
+        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
+        Ok(bytes_frame)
+    }
+}
+
+impl<T: ConvertWithDelims> Convert<WithDelims> for T {
+    fn to_bytes(
+        &self,
+        escape_byte: Option<u8>,
+        starting_delimiter: Option<Vec<u8>>,
+        ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        ConvertWithDelims::to_bytes(self, escape_byte, starting_delimiter, ending_delimiter)
     }
 }
 
@@ -325,7 +325,7 @@ impl Default for TcpFsSender {
 impl StreamSender for TcpFsSender {
     async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
-        S: Handle<W> + Send,
+        S: Convert<W> + Send,
     {
         frame.to_bytes(
             self.escape_byte,
@@ -389,7 +389,7 @@ impl StateDelims for TcpFsBidirectional {
 impl StreamSender for TcpFsBidirectional {
     async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
-        S: Handle<W> + Send,
+        S: Convert<W> + Send,
     {
         frame.to_bytes(
             self.escape_byte,
@@ -530,7 +530,7 @@ impl FrameHandler for FrameEncoder {
                 let mut end_pos = 0;
                 let delimiter_iter = end_delimiter.iter();
                 // TODO: see if I could for the subsequence matching
-                // handle partial matches at the end of the iterator, signify that and start a remainder
+                //  partial matches at the end of the iterator, signify that and start a remainder
                 // waiting for the next amount of bytes from a read
                 'end_delims: loop {
                     match find_subsequence_by_windows_iter(

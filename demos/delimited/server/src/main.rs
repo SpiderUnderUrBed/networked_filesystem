@@ -1,16 +1,13 @@
 use networked_filesystem::flume_delimited::{FlumeFile, TcpFsReceiver};
 use networked_filesystem::{Direction, LocalState, RemoteFileSystem};
-use serde::{Deserialize, Serialize};
+
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    sync::{Mutex, broadcast},
 };
 
-#[derive(Deserialize, Serialize)]
-struct PingRequest {}
 
 struct AppState {
     filesystem: Arc<RwLock<RemoteFileSystem<TcpFsReceiver, FlumeFile>>>,
