@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, pin::Pin};
 
-use crate::{
-    FileFrameStatus, FileHandleStatus, Decodable, FrameHandler, RemoteFileSystem,
-    StreamReceiver, StreamableFileSystemErrors,
-};
 use crate::FrameCommons;
+use crate::{
+    Decodable, FileFrameStatus, FileHandleStatus, FrameHandler, RemoteFileSystem, StreamReceiver,
+    StreamableFileSystemErrors,
+};
 
 pub struct HNil<S, F> {
     _marker2: PhantomData<fn(S, F)>,
@@ -140,9 +140,7 @@ where
                     FileHandleStatus::IncorrectStateAsked => {
                         StreamableFileSystemErrors::IncorrectStateAsked
                     }
-                    FileHandleStatus::Any(e) => {
-                        StreamableFileSystemErrors::Any(e)
-                    }
+                    FileHandleStatus::Any(e) => StreamableFileSystemErrors::Any(e),
                 })?;
             }
             Err(e) => {
@@ -171,46 +169,47 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
             fs: self.fs,
         }
     }
-    pub async fn decode_bytes(&mut self, state_id: u8, bytes: Vec<u8>, remainder: &mut u64) -> Result<(), StreamableFileSystemErrors> {
-            let mut total_bytes = Vec::new();
-            total_bytes.extend(self.fs.remainder.clone());
-            self.fs.remainder = Vec::new();
-            total_bytes.extend(bytes);
-            let mut frame = self.fs.state.create_frame_handler();
-            frame.set_chunks(self.fs.remainder.clone());
+    pub async fn decode_bytes(
+        &mut self,
+        state_id: u8,
+        bytes: Vec<u8>,
+        remainder: &mut u64,
+    ) -> Result<(), StreamableFileSystemErrors> {
+        let mut total_bytes = Vec::new();
+        total_bytes.extend(self.fs.remainder.clone());
+        self.fs.remainder = Vec::new();
+        total_bytes.extend(bytes);
+        let mut frame = self.fs.state.create_frame_handler();
+        frame.set_chunks(self.fs.remainder.clone());
 
-            match frame.append_bytes_recv(&total_bytes, remainder) {
-                Ok(frames) => {
-                    for frame in &frames {
-                        let chunks = frame.get_chunks();
-                        let _ = self
-                            .list
-                            .execute(state_id, chunks.clone(), &mut self.fs)
-                            .await?;
-                    }
-                    if let Some(last_frame) = frames.iter().last() {
-                        self.fs.remainder.extend(last_frame.get_remainder().clone());
-                    }
+        match frame.append_bytes_recv(&total_bytes, remainder) {
+            Ok(frames) => {
+                for frame in &frames {
+                    let chunks = frame.get_chunks();
+                    let _ = self
+                        .list
+                        .execute(state_id, chunks.clone(), &mut self.fs)
+                        .await?;
+                }
+                if let Some(last_frame) = frames.iter().last() {
+                    self.fs.remainder.extend(last_frame.get_remainder().clone());
+                }
+                Ok(())
+            }
+            Err(e) => match e {
+                FileFrameStatus::FrameNoBegins => Ok(()),
+                FileFrameStatus::FrameNoEnds => {
+                    let remainder = total_bytes;
+                    self.fs.remainder = remainder.to_vec();
                     Ok(())
                 }
-                Err(e) => {
-                    match e {
-                        FileFrameStatus::FrameNoBegins => {
-                            Ok(())
-                        }
-                        FileFrameStatus::FrameNoEnds => {
-                            let remainder = total_bytes;
-                            self.fs.remainder = remainder.to_vec();
-                            Ok(())
-                        }
-                        FileFrameStatus::NotValidFrame
-                        | FileFrameStatus::NoFrameDecoding
-                        | FileFrameStatus::NotCorrectFrame => {
-                            return Err(StreamableFileSystemErrors::Unknown);
-                        }
-                    }
+                FileFrameStatus::NotValidFrame
+                | FileFrameStatus::NoFrameDecoding
+                | FileFrameStatus::NotCorrectFrame => {
+                    return Err(StreamableFileSystemErrors::Unknown);
                 }
-            }
+            },
+        }
     }
     pub async fn run(&mut self, state_id: u8) -> Result<(), StreamableFileSystemErrors> {
         let remainder = &mut 0;

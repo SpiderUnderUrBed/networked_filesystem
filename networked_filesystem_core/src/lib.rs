@@ -1,18 +1,23 @@
 use async_trait::async_trait;
-use std::{
-    collections::{HashMap, VecDeque}, error::Error, fmt::Debug, io::Write, sync::Arc, vec
-};
-use futures::future::{Either, pending};
 use futures::Stream;
 use futures::StreamExt;
-use num_enum::{TryFromPrimitive};
+use futures::future::{Either, pending};
+use num_enum::TryFromPrimitive;
 use std::fs::File as StdFile;
+use std::{
+    collections::{HashMap, VecDeque},
+    error::Error,
+    fmt::Debug,
+    io::Write,
+    sync::Arc,
+    vec,
+};
 
-use tokio::{sync::watch};
+use tokio::sync::watch;
 
 pub use flume_delmited_v1::*;
 
-use crate::flume_delmited_v1::flume_delimited::{ConvertWithDelims};
+use crate::flume_delmited_v1::flume_delimited::ConvertWithDelims;
 
 pub mod chain;
 mod delimited_commons;
@@ -117,7 +122,7 @@ impl FrameCommons for FileFrame {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
         Ok(self.direction.clone().unwrap())
     }
-    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
         Ok(self.operation.clone().unwrap())
     }
 }
@@ -134,7 +139,7 @@ pub enum FileHandleStatus {
     NoStateGiven,
     IncorrectData,
     IncorrectStateAsked,
-    Any(Box<dyn Error + Send + Sync>)
+    Any(Box<dyn Error + Send + Sync>),
 }
 
 #[derive(Debug)]
@@ -425,7 +430,7 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                         Ok(frames) => {
                             for frame in &frames {
                                 if let Ok(direction) = frame.get_direction() {
-                                    if direction == self.direction{
+                                    if direction == self.direction {
                                         continue;
                                     }
                                 } else {
@@ -532,18 +537,15 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
                                 frame.append_bytes_send(chunk.to_vec());
 
                                 if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
-                                    if let Err(e) = self.state.send(bytes).await{
+                                    if let Err(e) = self.state.send(bytes).await {
                                         println!("{:#?}", e);
                                     }
                                 }
                             }
                         }
-                        Err(e) => {
-                            return Err(StreamableFileSystemErrors::TransportRecvError(e))
-                        },
+                        Err(e) => return Err(StreamableFileSystemErrors::TransportRecvError(e)),
                     }
                 }
-
             }
             _ => return Err(StreamableFileSystemErrors::None),
         }
@@ -559,7 +561,7 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
             location.as_bytes().to_vec(),
         );
         if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
-            if let Err(e) = self.state.send(bytes).await{
+            if let Err(e) = self.state.send(bytes).await {
                 println!("{:#?}", e);
             }
         }
@@ -572,13 +574,13 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
         let _ = self.unique_operation_event.0.send(self.operation.clone());
         match self.operation {
             Operation::Move => {
-                    let (extracted, kept): (Vec<F>, Vec<F>) = std::mem::take(&mut self.files)
-                        .into_iter()
-                        .partition(|f| f.get_state() == state_id);
+                let (extracted, kept): (Vec<F>, Vec<F>) = std::mem::take(&mut self.files)
+                    .into_iter()
+                    .partition(|f| f.get_state() == state_id);
 
-                    self.files = kept;
+                self.files = kept;
 
-                    for file in extracted {
+                for file in extracted {
                     self.operation = Operation::Set;
                     if let Some(state) = self.local_state.get_mut(&state_id) {
                         state.location = file.get_location();
@@ -616,16 +618,14 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
             Operation::Eof => {
                 let frame = EofFrame::new(Some(self.direction.clone()));
                 if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
-                    if let Err(e) = self.state.send(bytes).await{
+                    if let Err(e) = self.state.send(bytes).await {
                         println!("{:#?}", e);
                     }
                 }
                 Ok(())
             }
             Operation::Drain => return Err(StreamableFileSystemErrors::None),
-            Operation::Acknowlage => {
-                return Err(StreamableFileSystemErrors::None)
-            },
+            Operation::Acknowlage => return Err(StreamableFileSystemErrors::None),
         }
     }
 }
@@ -682,12 +682,19 @@ impl<T: Send + 'static> ChannelSend<T> for flume::Sender<T> {
     }
 }
 
-impl<S: BidirectionalStream + Default + Send, F: FileSender + Send> RemoteFileSystem<S, F> {
-pub async fn receive_operation_bidirectionally(
-    &mut self,
-    fs_state_id: u8,
-    mut rx: Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
-) -> Result<(), StreamableFileSystemErrors> {
+impl<S, F> RemoteFileSystem<S, F>
+where
+    S: BidirectionalStream + Default + Send,
+    F: FileSender + Send,
+{
+    pub async fn receive_operation_bidirectionally<W>(
+        &mut self,
+        fs_state_id: u8,
+        mut rx: Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+    ) -> Result<(), StreamableFileSystemErrors>
+    where
+        S: FrameWrite<W, FileFrame> + FrameWrite<W, EofFrame>,
+    {
         let remainder = &mut 0;
 
         loop {
@@ -705,7 +712,7 @@ pub async fn receive_operation_bidirectionally(
                         Ok(frames) => {
                             for frame in &frames {
                                 if let Ok(direction) = frame.get_direction() {
-                                    if direction == self.direction{
+                                    if direction == self.direction {
                                         continue;
                                     }
                                 } else {
@@ -765,27 +772,22 @@ pub async fn receive_operation_bidirectionally(
                                         })?;
                                     // return Err(StreamableFileSystemErrors::NoFrameFound(chunks));
                                 } else if let Ok(drain_frame) = DrainFrame::decode(chunks) {
-                                    DrainFrame::handle(
-                                        drain_frame,
-                                        fs_state_id,
-                                        self,
-                                        &mut rx,
-                                    )
-                                    .await
-                                    .map_err(|e| match e {
-                                        FileHandleStatus::NoStateGiven => {
-                                            StreamableFileSystemErrors::NoStateGiven
-                                        }
-                                        FileHandleStatus::IncorrectData => {
-                                            StreamableFileSystemErrors::IncorrectData
-                                        }
-                                        FileHandleStatus::IncorrectStateAsked => {
-                                            StreamableFileSystemErrors::IncorrectStateAsked
-                                        }
-                                        FileHandleStatus::Any(e) => {
-                                            StreamableFileSystemErrors::Any(e)
-                                        }
-                                    })?;
+                                    DrainFrame::handle(drain_frame, fs_state_id, self, &mut rx)
+                                        .await
+                                        .map_err(|e| match e {
+                                            FileHandleStatus::NoStateGiven => {
+                                                StreamableFileSystemErrors::NoStateGiven
+                                            }
+                                            FileHandleStatus::IncorrectData => {
+                                                StreamableFileSystemErrors::IncorrectData
+                                            }
+                                            FileHandleStatus::IncorrectStateAsked => {
+                                                StreamableFileSystemErrors::IncorrectStateAsked
+                                            }
+                                            FileHandleStatus::Any(e) => {
+                                                StreamableFileSystemErrors::Any(e)
+                                            }
+                                        })?;
                                 }
                             }
                             if let Some(last_frame) = frames.iter().last() {
@@ -810,47 +812,51 @@ pub async fn receive_operation_bidirectionally(
             }
         }
     }
-pub async fn create_bidirectional_handler(
-    this: Arc<tokio::sync::Mutex<Self>>,
-    fs_state_id: u8,
-    mut rx: Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
-) {
 
-    loop {
-        let sender_future = {
-            let this = Arc::clone(&this);
-            async move {
-                let mut guard = this.lock().await;
-                guard.execute_operation_bidirectionally(fs_state_id).await
-            }
-        };
-
-        let receiver_future = if let Some(rx_ref) = rx.as_mut() {
-            Either::Left({
+    pub async fn create_bidirectional_handler(
+        this: Arc<tokio::sync::Mutex<Self>>,
+        fs_state_id: u8,
+        mut rx: Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+    ) where
+        S: FrameWrite<F, FileFrame> + FrameWrite<F, EofFrame>,
+    {
+        loop {
+            let sender_future = {
                 let this = Arc::clone(&this);
                 async move {
                     let mut guard = this.lock().await;
-                    guard.receive_operation_bidirectionally(fs_state_id, Some(rx_ref)).await
+                    guard.execute_operation_bidirectionally(fs_state_id).await
                 }
-            })
-        } else {
-            Either::Right(pending())
-        };
+            };
 
-        tokio::select! {
-            send_result = sender_future => {
-                if let Err(e) = send_result {
-                    println!("{:#?}", e);
+            let receiver_future = if let Some(rx_ref) = rx.as_mut() {
+                Either::Left({
+                    let this = Arc::clone(&this);
+                    async move {
+                        let mut guard = this.lock().await;
+                        guard
+                            .receive_operation_bidirectionally(fs_state_id, Some(rx_ref))
+                            .await
+                    }
+                })
+            } else {
+                Either::Right(pending())
+            };
+
+            tokio::select! {
+                send_result = sender_future => {
+                    if let Err(e) = send_result {
+                        println!("{:#?}", e);
+                    }
                 }
-            }
-            receiver_result = receiver_future => {
-                if let Err(e) = receiver_result {
-                    println!("{:#?}", e);
+                receiver_result = receiver_future => {
+                    if let Err(e) = receiver_result {
+                        println!("{:#?}", e);
+                    }
                 }
             }
         }
     }
-}
     pub async fn execute_operation_bidirectionally(
         &mut self,
         state_id: u8,
@@ -921,12 +927,12 @@ pub async fn create_bidirectional_handler(
                 Ok(())
             }
             Operation::Acknowlage => {
-                  let frame = AcknowlageFrame::new(Some(self.direction.clone()));
+                let frame = AcknowlageFrame::new(Some(self.direction.clone()));
                 if let Ok(bytes) = self.state.encode_frame(frame.clone()).await {
                     let _ = self.state.send(bytes).await;
                 }
                 Ok(())
-            },
+            }
         }
     }
 }
@@ -942,7 +948,7 @@ impl FrameCommons for SetFrame {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
         Ok(self.direction.clone().unwrap())
     }
-    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
         Ok(self.operation.clone().unwrap())
     }
 }
@@ -1025,18 +1031,24 @@ impl AcknowlageFrame {
             operation: Some(Operation::Acknowlage),
         }
     }
-    pub fn to_bytes<S, F>(filesystem: RemoteFileSystem<S, F>) -> Result<Vec<u8>, FileFrameStatus> 
-        where S: StateDelims
+    pub fn to_bytes<S, F>(filesystem: RemoteFileSystem<S, F>) -> Result<Vec<u8>, FileFrameStatus>
+    where
+        S: StateDelims,
     {
         let state = filesystem.state;
-        ConvertWithDelims::to_bytes(&AcknowlageFrame::new(Some(filesystem.direction)), state.get_escape_byte(), state.get_starting_delims(), state.get_ending_delims())
+        ConvertWithDelims::to_bytes(
+            &AcknowlageFrame::new(Some(filesystem.direction)),
+            state.get_escape_byte(),
+            state.get_starting_delims(),
+            state.get_ending_delims(),
+        )
     }
 }
 impl FrameCommons for AcknowlageFrame {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
         Ok(self.direction.clone().unwrap())
     }
-    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
         Ok(self.operation.clone().unwrap())
     }
 }
@@ -1073,7 +1085,6 @@ impl Decodable for AcknowlageFrame {
     }
 }
 
-
 #[derive(Debug, Default, Clone)]
 pub struct EofFrame {
     direction: Option<Direction>,
@@ -1091,24 +1102,29 @@ impl EofFrame {
         _state_id: u8,
         fs: &mut RemoteFileSystem<S, F>,
     ) -> Result<(), FileHandleStatus> {
-        if let Some(mut file_handle) = fs.file_handle.take(){
+        if let Some(mut file_handle) = fs.file_handle.take() {
             let _ = file_handle.flush();
             let _ = file_handle.sync_all();
         }
         Ok(())
     }
     pub fn raw_output_with_delims<S: StateDelims + StreamSender, F>(
-         fs: &mut RemoteFileSystem<S, F>,
+        fs: &mut RemoteFileSystem<S, F>,
     ) -> Vec<u8> {
         let frame = EofFrame::new(Some(fs.direction.clone()));
-        let bytes = ConvertWithDelims::to_bytes(&frame, fs.state.get_escape_byte(), fs.state.get_starting_delims(), fs.state.get_ending_delims())
-            .unwrap();
+        let bytes = ConvertWithDelims::to_bytes(
+            &frame,
+            fs.state.get_escape_byte(),
+            fs.state.get_starting_delims(),
+            fs.state.get_ending_delims(),
+        )
+        .unwrap();
         bytes
     }
     pub async fn output_with_delims<S: StateDelims + StreamSender, F>(
         fs: &mut RemoteFileSystem<S, F>,
     ) -> Result<(), FileHandleStatus> {
-        let bytes= EofFrame::raw_output_with_delims(fs);
+        let bytes = EofFrame::raw_output_with_delims(fs);
         let _ = fs.state.send(bytes).await;
         Ok(())
     }
@@ -1117,7 +1133,7 @@ impl FrameCommons for EofFrame {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
         Ok(self.direction.clone().unwrap())
     }
-    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
         Ok(self.operation.clone().unwrap())
     }
 }
@@ -1153,40 +1169,51 @@ impl Decodable for EofFrame {
     }
 }
 
-pub struct WithDelims;
 pub struct WithoutDelims;
+pub struct WithDelims;
 
 #[async_trait]
-pub trait FrameWrite<W>: BidirectionalStream + Sized + Send {
+pub trait FrameWrite<W, Fr>: BidirectionalStream + Sized + Send {
     async fn frame_write<F: Send>(
         fs: &mut RemoteFileSystem<Self, F>,
-        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+        frame: &Fr,
     ) -> Result<(), FileHandleStatus>;
 }
 
 #[async_trait]
-impl<S> FrameWrite<WithDelims> for S
+impl<S, Fr> FrameWrite<WithDelims, Fr> for S
 where
     S: BidirectionalStream + StateDelims + Send,
+    Fr: ConvertWithDelims + Sync,
 {
     async fn frame_write<F: Send>(
         fs: &mut RemoteFileSystem<S, F>,
-        rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+        frame: &Fr,
     ) -> Result<(), FileHandleStatus> {
-        DrainFrame::write_from_stream_with_delims(fs, rx).await
+        let bytes = ConvertWithDelims::to_bytes(
+            frame,
+            fs.state.get_escape_byte(),
+            fs.state.get_starting_delims(),
+            fs.state.get_ending_delims(),
+        )
+        .map_err(|_| FileHandleStatus::IncorrectData)?;
+        fs.state.send(bytes).await.map_err(FileHandleStatus::Any)
     }
 }
 
 #[async_trait]
-impl<S> FrameWrite<WithoutDelims> for S
+impl<S, Fr> FrameWrite<WithLength, Fr> for S
 where
     S: BidirectionalStream + Send,
+    Fr: ConvetWithLength + Sync,
 {
     async fn frame_write<F: Send>(
-        _fs: &mut RemoteFileSystem<S, F>,
-        _rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
+        fs: &mut RemoteFileSystem<S, F>,
+        frame: &Fr,
     ) -> Result<(), FileHandleStatus> {
-        todo!()
+        let bytes =
+            ConvetWithLength::to_bytes(frame).map_err(|_| FileHandleStatus::IncorrectData)?;
+        fs.state.send(bytes).await.map_err(FileHandleStatus::Any)
     }
 }
 
@@ -1220,23 +1247,19 @@ impl DrainFrame {
         rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
     ) -> Result<(), FileHandleStatus>
     where
-        S: FrameWrite<W>,
+        S: FrameWrite<W, FileFrame> + FrameWrite<W, EofFrame>,
         F: Send,
     {
-        S::frame_write(fs, rx).await
+        Self::write_from_stream::<W, S, F>(fs, rx).await
     }
 
-    pub async fn write_from_custom_stream_with_delims<S, F, C>(
-        _output: DrainFrame,
-        _state_id: u8,
-        fs: RemoteFileSystem<S, F>,
+    pub async fn write_from_stream<W, S, F>(
+        fs: &mut RemoteFileSystem<S, F>,
         rx: &mut Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
-        tx: C,
     ) -> Result<(), FileHandleStatus>
     where
-        S: BidirectionalStream + StateDelims,
-        C: ChannelSend<Vec<u8>>,
-        C::Error: std::error::Error + Send + Sync + 'static,
+        S: FrameWrite<W, FileFrame> + FrameWrite<W, EofFrame>,
+        F: Send,
     {
         let rx = match rx.take() {
             Some(rx) => rx,
@@ -1244,39 +1267,26 @@ impl DrainFrame {
         };
 
         loop {
-            if let Some(bytes) = rx.next().await {
-                let mut frame = FileFrame::new(
-                    fs.direction.clone(),
-                    Operation::Move,
-                    Codec::RawContinues,
-                    ChunkingStatus::Continues,
-                );
-                frame.append_bytes_send(bytes);
-                let completed_frame = ConvertWithDelims::to_bytes(
-                    &frame,
-                    fs.state.get_escape_byte(),
-                    fs.state.get_starting_delims(),
-                    fs.state.get_ending_delims(),
-                )
-                .unwrap();
-
-                if let Err(e) = tx.send(completed_frame).await {
-                    return Err(FileHandleStatus::Any(Box::new(e)));
+            match rx.next().await {
+                Some(bytes) => {
+                    let mut frame = FileFrame::new(
+                        fs.direction.clone(),
+                        Operation::Move,
+                        Codec::RawContinues,
+                        ChunkingStatus::Continues,
+                    );
+                    frame.append_bytes_send(bytes);
+                    if let Err(e) = <S as FrameWrite<W, FileFrame>>::frame_write(fs, &frame).await {
+                        println!("{:#?}", e);
+                    }
                 }
-            } else {
-                let frame = EofFrame::new(Some(fs.direction.clone()));
-                let completed_frame = ConvertWithDelims::to_bytes(
-                    &frame,
-                    fs.state.get_escape_byte(),
-                    fs.state.get_starting_delims(),
-                    fs.state.get_ending_delims(),
-                )
-                .unwrap();
-
-                if let Err(e) = tx.send(completed_frame).await {
-                    println!("failed to send EOF frame: {:#?}", e);
+                None => {
+                    let frame = EofFrame::new(Some(fs.direction.clone()));
+                    if let Err(e) = <S as FrameWrite<W, EofFrame>>::frame_write(fs, &frame).await {
+                        println!("{:#?}", e);
+                    }
+                    return Ok(());
                 }
-                return Ok(());
             }
         }
     }

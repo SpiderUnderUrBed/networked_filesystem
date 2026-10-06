@@ -3,11 +3,14 @@ use std::{collections::VecDeque, error::Error};
 use async_trait::async_trait;
 use multipeek::IteratorExt;
 
-use crate::{
-    AcknowlageFrame, BidirectionalStream, Convert, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StateDelims, StreamReceiver, StreamSender, TransportRecvError, delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter}
-};
 use crate::Direction;
 use crate::Operation;
+use crate::{
+    AcknowlageFrame, BidirectionalStream, Convert, DrainFrame, EofFrame, FileFrame,
+    FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame,
+    StateDelims, StreamReceiver, StreamSender, TransportRecvError,
+    delimited_commons::subsequence::{SubsequenceStatus, find_subsequence_by_windows_iter},
+};
 
 pub struct FlumeFile {
     pub state_id: u8,
@@ -53,7 +56,7 @@ impl FileSender for FlumeFile {
     fn get_location(&self) -> String {
         self.final_location.clone()
     }
-    
+
     fn get_state(&self) -> u8 {
         self.state_id
     }
@@ -370,7 +373,13 @@ pub struct TcpFsBidirectional {
 impl Default for TcpFsBidirectional {
     fn default() -> Self {
         let (tx, rx) = flume::unbounded();
-        Self { tx, rx, start_delimiter: Default::default(), end_delimiter: Default::default(), escape_byte: Default::default() }
+        Self {
+            tx,
+            rx,
+            start_delimiter: Default::default(),
+            end_delimiter: Default::default(),
+            escape_byte: Default::default(),
+        }
     }
 }
 impl StateDelims for TcpFsBidirectional {
@@ -470,14 +479,16 @@ impl FrameEncoder {
 }
 impl FrameCommons for FrameEncoder {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
-        let direction = self.file_chunks
+        let direction = self
+            .file_chunks
             .get(0)
             .map(|v| (*v).try_into().map_err(|_| FileFrameStatus::NotValidFrame))
             .ok_or_else(|| FileFrameStatus::NotValidFrame)??;
         Ok(direction)
     }
-    fn get_operation(&self) -> Result<Operation, FileFrameStatus>{
-        let operation = self.file_chunks
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
+        let operation = self
+            .file_chunks
             .get(0)
             .map(|v| (*v).try_into().map_err(|_| FileFrameStatus::NotValidFrame))
             .ok_or_else(|| FileFrameStatus::NotValidFrame)??;
