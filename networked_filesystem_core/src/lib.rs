@@ -15,13 +15,16 @@ use std::{
 
 use tokio::sync::watch;
 
-pub use flume_delmited_v1::*;
+// pub use flume_delmited_v1::*;
+// use length_delimited_v2::*;
 
 use crate::flume_delmited_v1::flume_delimited::ConvertWithDelims;
+use crate::length_delimited_v2::length_delimited_v2::WithLength;
 
 pub mod chain;
 mod delimited_commons;
 mod flume_delmited_v1;
+mod length_delimited_v2;
 
 // use flume_delmited_v1::flume_delimited::*;
 #[derive(Clone, TryFromPrimitive, Debug, PartialEq)]
@@ -89,27 +92,12 @@ pub trait ConvetWithLength {
     fn to_bytes(&self) -> Result<Vec<u8>, FileFrameStatus>;
 }
 
-pub struct WithLength;
 
 pub trait Convert<W> {
-    fn to_bytes(
-        &self,
-        escape_byte: Option<u8>,
-        starting_delimiter: Option<Vec<u8>>,
-        ending_delimiter: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, FileFrameStatus>;
+    fn to_bytes(&self, options: W) -> Result<Vec<u8>, FileFrameStatus>;
 }
 
-impl<T: ConvetWithLength> Convert<WithLength> for T {
-    fn to_bytes(
-        &self,
-        _escape_byte: Option<u8>,
-        _starting_delimiter: Option<Vec<u8>>,
-        _ending_delimiter: Option<Vec<u8>>,
-    ) -> Result<Vec<u8>, FileFrameStatus> {
-        ConvetWithLength::to_bytes(self)
-    }
-}
+
 #[derive(Default, Clone, Debug)]
 pub struct FileFrame {
     direction: Option<Direction>,
@@ -274,7 +262,7 @@ pub trait StreamReceiver {
     //type FrameOutput: FrameHandler;
     type FrameOutput: FrameHandler<FrameOutput = Self::FrameOutput> + FrameCommons;
     fn create_frame_handler(&self) -> Self::FrameOutput;
-    async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError>;
+    async fn recv(&mut self) -> Result<Vec<u8>, FileStreamError>;
 }
 
 #[derive(Debug)]
@@ -284,11 +272,13 @@ pub enum FileStreamError {
 
 #[async_trait]
 pub trait StreamSender {
-    async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
+    type Opts;
+    async fn encode_frame<S>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
-        S: Convert<W> + Send;
+        S: Convert<Self::Opts> + Send;
     async fn send(&mut self, bytes: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
+
 
 pub trait BidirectionalStream: StreamSender + StreamReceiver {}
 // pub trait BidirectionalStream: StreamSender {
@@ -302,7 +292,7 @@ pub trait BidirectionalStream: StreamSender + StreamReceiver {}
 // }
 
 pub trait FileSender {
-    async fn get_chunk(&mut self) -> Result<Vec<u8>, TransportRecvError>;
+    async fn recv(&mut self) -> Result<Vec<u8>, TransportRecvError>;
     fn get_location(&self) -> String;
     fn get_state(&self) -> u8;
 }
@@ -417,7 +407,7 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
         let remainder = &mut 0;
 
         loop {
-            match self.state.get_chunk().await {
+            match self.state.recv().await {
                 Ok(bytes) => {
                     let mut total_bytes = Vec::new();
                     total_bytes.extend(self.remainder.clone());
@@ -517,14 +507,19 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
 }
 
 impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
-    pub async fn send_file(&mut self, mut file: F) -> Result<(), StreamableFileSystemErrors> {
+    pub async fn send_file(&mut self, mut file: F) -> Result<(), StreamableFileSystemErrors> 
+        where
+            FileFrame: Convert<S::Opts>,
+            SetFrame: Convert<S::Opts>,
+            EofFrame: Convert<S::Opts>,
+    {
         match self.codec {
             Codec::Multipart => {
                 todo!()
             }
             Codec::Raw | Codec::RawContinues => {
                 loop {
-                    match file.get_chunk().await {
+                    match file.recv().await {
                         Ok(bytes) => {
                             for chunk in bytes.chunks(4096) {
                                 let mut frame = FileFrame::new(
@@ -554,7 +549,12 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
         &mut self,
         state_id: u8,
         location: String,
-    ) -> Result<(), StreamableFileSystemErrors> {
+    ) -> Result<(), StreamableFileSystemErrors> 
+        where 
+            FileFrame: Convert<S::Opts>,
+            SetFrame: Convert<S::Opts>,
+            EofFrame: Convert<S::Opts>,
+    {
         let frame = SetFrame::new(
             Some(self.direction.clone()),
             state_id,
@@ -570,7 +570,12 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
     pub async fn execute_operation(
         &mut self,
         state_id: u8,
-    ) -> Result<(), StreamableFileSystemErrors> {
+    ) -> Result<(), StreamableFileSystemErrors> 
+        where 
+            FileFrame: Convert<S::Opts>,
+            SetFrame: Convert<S::Opts>,
+            EofFrame: Convert<S::Opts>,
+    {
         let _ = self.unique_operation_event.0.send(self.operation.clone());
         match self.operation {
             Operation::Move => {
@@ -699,7 +704,7 @@ where
 
         loop {
             // let rx_ref = rx.as_deref_mut();
-            match self.state.get_chunk().await {
+            match self.state.recv().await {
                 Ok(bytes) => {
                     let mut total_bytes = Vec::new();
                     total_bytes.extend(self.remainder.clone());
@@ -819,6 +824,11 @@ where
         mut rx: Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
     ) where
         S: FrameWrite<F, FileFrame> + FrameWrite<F, EofFrame>,
+        FileFrame: Convert<S::Opts>,
+        SetFrame: Convert<S::Opts>,
+        EofFrame: Convert<S::Opts>,
+        DrainFrame: Convert<S::Opts>,
+        AcknowlageFrame: Convert<S::Opts>,
     {
         loop {
             let sender_future = {
@@ -861,7 +871,14 @@ where
         &mut self,
         state_id: u8,
         // mut rx: &impl Iterator<Item = Vec<u8>>,
-    ) -> Result<(), StreamableFileSystemErrors> {
+    ) -> Result<(), StreamableFileSystemErrors> 
+        where 
+            FileFrame: Convert<S::Opts>,
+            SetFrame: Convert<S::Opts>,
+            EofFrame: Convert<S::Opts>,
+            DrainFrame: Convert<S::Opts>,
+            AcknowlageFrame: Convert<S::Opts>,
+    {
         if self.operation == *self.unique_operation_event.1.borrow() {
             return Ok(());
         }

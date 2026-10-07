@@ -215,7 +215,7 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
         let remainder = &mut 0;
 
         loop {
-            match self.fs.state.get_chunk().await {
+            match self.fs.state.recv().await {
                 Ok(bytes) => {
                     self.decode_bytes(state_id, bytes, remainder).await?;
                 }

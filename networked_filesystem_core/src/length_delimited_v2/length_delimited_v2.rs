@@ -1,197 +1,159 @@
-#![feature(buf_read_has_data_left)]
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::cmp::min;
-use std::thread;
-use arrayvec::ArrayVec;
+use std::error::Error;
 
+use async_trait::async_trait;
+use futures::sink::With;
+use tokio::sync::mpsc;
 
-const MAX_CHUNK_SIZE: usize = 4076;
-const NW: &'static str = "127.0.0.1:1987";
+use crate::{AcknowlageFrame, Convert, ConvetWithLength, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StreamReceiver, StreamSender};
 
-const LENGTH_OFFSET: usize = size_of::<MessageKind>();
-const LENGTH_SIZE: usize = size_of::<u64>();
-const DATA_OFFSET: usize = LENGTH_OFFSET + LENGTH_SIZE;
-
-#[repr(u8)]
-enum MessageKind {
-	FileChunk = 1,
-	Eof = 2,
+pub struct MspcFile {
+    pub state_id: u8,
+    pub original_location: Option<String>,
+    pub final_location: String,
+    pub content_stream: Option<mpsc::Receiver<Vec<u8>>>,
 }
 
-impl MessageKind {
-	fn from(val: u8) -> MessageKind {
-		match val {
-			1 => Self::FileChunk,
-			2 => Self::Eof,
-			_ => panic!("invalid message kind {val}"),
-		}
-	}
+impl FileSender for MspcFile {
+    async fn recv(&mut self) -> Result<Vec<u8>, crate::TransportRecvError> {
+        todo!()
+    }
+
+    fn get_location(&self) -> String {
+        todo!()
+    }
+
+    fn get_state(&self) -> u8 {
+        todo!()
+    }
 }
 
-enum FileSenderResult<'a> {
-	Ok(&'a [u8]),
-	NoData,
-	Eof,
-	Err(io::Error),
+pub struct WithLength;
+
+pub trait ConvertWithLength {
+    // type FrameOutput;
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus>;
+    //    fn create_frame_handler() -> Self::FrameOutput;
 }
 
-enum FileReceiverResult {
-	Ok,
-	Finished,
-	Err(io::Error),
+impl ConvertWithLength for FileFrame {
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        todo!()
+    }
 }
 
-struct FileSender {
-	buf: [u8; MAX_CHUNK_SIZE],
-	input: Box<dyn BufRead>,
-	reached_eof: bool,
+impl ConvertWithLength for SetFrame {
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        todo!()
+    }
 }
 
-impl FileSender {
-	fn new(input: Box<dyn BufRead>) -> Self {
-		Self {buf: [0; _], input: input, reached_eof: false}
-	}
-
-	fn get_chunk(&mut self) -> FileSenderResult<'_> {
-		let has_data_left = self.input.has_data_left();
-		match has_data_left {
-			Err(err) => return FileSenderResult::Err(err),
-			Ok(false) => match self.reached_eof {
-				true => return FileSenderResult::Eof,
-				false => {
-					self.reached_eof = true;
-					self.buf[0] = MessageKind::Eof as u8;
-					return FileSenderResult::Ok(&self.buf[..LENGTH_OFFSET]);
-				}
-			}
-			Ok(true) => {},
-		}
-
-		let read_amount = match self.input.read(&mut self.buf[DATA_OFFSET..]) {
-			Ok(val) => val,
-			Err(err) =>  return FileSenderResult::Err(err),
-		};
-
-		assert!(read_amount <= MAX_CHUNK_SIZE - DATA_OFFSET);
-
-		if read_amount == 0 {
-			return FileSenderResult::NoData;
-		}
-
-		self.buf[0] = MessageKind::FileChunk as u8;
-		self.buf[LENGTH_OFFSET..DATA_OFFSET].clone_from_slice(&read_amount.to_le_bytes());
-
-		FileSenderResult::Ok(&self.buf[..DATA_OFFSET + read_amount])
-	}
+impl ConvertWithLength for EofFrame {
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        todo!()
+    }
 }
 
-struct FileReceiver {
-	output: Box<dyn Write>,
-	state: FileReceiverState,
-}
-
-enum FileReceiverState {
-	ReadingKind,
-	ReadingSize(ArrayVec<u8, LENGTH_SIZE>),
-	ReadingChunkData(u64),
-	Done,
-}
-
-impl FileReceiver {
-	fn new(out: Box<dyn Write>) -> Self {
-		Self {output: out, state: FileReceiverState::ReadingKind}
-	}
-
-	fn receive_chunk(&mut self, data: &[u8]) -> FileReceiverResult {
-		use FileReceiverState::*;
-		let mut data_offset = 0;
-		while data.len() - data_offset > 0 {
-			match &mut self.state {
-				ReadingKind => match MessageKind::from(data[data_offset]) {
-					MessageKind::Eof => self.state = Done,
-					MessageKind::FileChunk => {
-						data_offset += 1;
-						self.state = ReadingSize(ArrayVec::new());
-					}
-				},
-				ReadingSize(size_bytes) => {
-					let read_bytes = min(size_bytes.remaining_capacity(), data.len() - data_offset);
-
-					size_bytes.try_extend_from_slice(&data[data_offset..data_offset + read_bytes]).unwrap();
-					data_offset += read_bytes;
-
-					if size_bytes.is_full() {
-						let chunk_size = u64::from_le_bytes(size_bytes.as_slice().try_into().unwrap());
-						assert!(chunk_size <= (MAX_CHUNK_SIZE - DATA_OFFSET) as u64);
-						self.state = ReadingChunkData(chunk_size);
-					}
-				},
-				ReadingChunkData(remaining_bytes) => {
-					let read_bytes = min(data.len() - data_offset, *remaining_bytes as usize);
-					if let Err(err) = self.output.write_all(&data[data_offset..data_offset + read_bytes]) { return FileReceiverResult::Err(err); }
-					*remaining_bytes -= read_bytes as u64;
-					data_offset += read_bytes;
-					if *remaining_bytes == 0 {
-						self.state = ReadingKind;
-					}
-				},
-				Done => return FileReceiverResult::Finished,
-			}
-		}
-		FileReceiverResult::Ok
-	}
+impl ConvertWithLength for AcknowlageFrame {
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        todo!()
+    }
 }
 
 
-fn main() {
-	let sender_thread = thread::spawn(|| {
-		let mut sender = FileSender::new(Box::new(BufReader::new(File::open("in.txt").unwrap())));
+impl<T: ConvetWithLength> Convert<WithLength> for T {
+    fn to_bytes(
+        &self,
+        _opts: WithLength
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        ConvetWithLength::to_bytes(self)
+    }
+}
 
-		let mut stream: TcpStream = loop {
-			match TcpStream::connect(NW) {
-				Ok(s) => break s,
-				_ => {}
-			}
-		};
+pub struct TcpFsBidirectional {
+    pub tx: mpsc::Sender<Vec<u8>>,
+    pub rx: mpsc::Receiver<Vec<u8>>
+}
 
-		while match sender.get_chunk() {
-			FileSenderResult::Ok(chunk) => {
-				stream.write_all(chunk).unwrap();
-				true
-			}
-			FileSenderResult::NoData => true,
-			FileSenderResult::Eof => false,
-			FileSenderResult::Err(err) => panic!("{:?}", err),
-		} {};
+#[async_trait]
+impl StreamSender for TcpFsBidirectional {
+    type Opts = WithLength;
+    async fn encode_frame<S>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
+    where
+        S: Convert<WithLength> + Send,
+    {
+        frame.to_bytes(WithLength {})
+    }
+    async fn send(&mut self, bytes: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.tx.send(bytes).await?;
+        Ok(())
+    }
+}
+pub struct FrameEncoder {
+}
 
-		println!("Sender done!");
-	});
-	let receiver_thread = thread::spawn(|| {
-		let mut receiver = FileReceiver::new(Box::new(File::create("out.txt").unwrap()));
+impl FrameCommons for FrameEncoder {
+    fn get_direction(&self) -> Result<crate::Direction, FileFrameStatus> {
+        todo!()
+    }
 
-		let listener = TcpListener::bind(NW).unwrap();
+    fn get_operation(&self) -> Result<crate::Operation, FileFrameStatus> {
+        todo!()
+    }
+}
 
-		let mut read_buf = [0u8; MAX_CHUNK_SIZE];
-		for mut stream in listener.incoming() {
-			loop {
-				match stream.as_mut().unwrap().read(&mut read_buf) {
-					Ok(count) => match receiver.receive_chunk(&read_buf[..count]) {
-						FileReceiverResult::Ok => {},
-						FileReceiverResult::Finished => break,
-						FileReceiverResult::Err(_) => panic!("!"),
-					}
-					Err(_) => panic!("error handling or something"),
-				}
-			}
-			break;
-		}
+impl FrameHandler for FrameEncoder {
+    type FrameOutput = Self;
 
-		println!("Receiver done!");
+    fn encode_bytes(&self, headers: Vec<u8>, content: Vec<u8>) -> Vec<u8> {
+        todo!()
+    }
 
-	});
+    fn append_bytes_recv(
+        &mut self,
+        bytes: &Vec<u8>,
+        _: &mut u64,
+    ) -> Result<std::collections::VecDeque<Self::FrameOutput>, FileFrameStatus> {
+        todo!()
+    }
 
-	sender_thread.join().unwrap();
-	receiver_thread.join().unwrap();
+    fn set_chunks(&mut self, chunks: Vec<u8>) {
+        todo!()
+    }
+
+    fn get_remainder(&self) -> Vec<u8> {
+        todo!()
+    }
+
+    fn get_chunks(&self) -> Vec<u8> {
+        todo!()
+    }
+}
+impl FrameEncoder {
+    fn new() -> FrameEncoder { 
+        FrameEncoder {  }
+    }
+}
+
+#[async_trait]
+impl StreamReceiver for TcpFsBidirectional {
+    type FrameOutput = FrameEncoder;
+    fn create_frame_handler(&self) -> FrameEncoder {
+        FrameEncoder::new()
+    }
+    async fn recv(&mut self) -> Result<Vec<u8>, FileStreamError> {
+        match self.rx.recv().await {
+            Some(bytes) => Ok(bytes),
+            None => Err(FileStreamError::Disconnect),
+        }
+    }
 }

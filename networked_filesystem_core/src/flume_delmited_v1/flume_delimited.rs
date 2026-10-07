@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, error::Error};
 
 use async_trait::async_trait;
+use futures::sink::With;
 use multipeek::IteratorExt;
 
 use crate::Direction;
@@ -30,7 +31,7 @@ impl Clone for FlumeFile {
 }
 
 impl FileSender for FlumeFile {
-    async fn get_chunk(&mut self) -> Result<Vec<u8>, TransportRecvError> {
+    async fn recv(&mut self) -> Result<Vec<u8>, TransportRecvError> {
         if let Some(stream) = self.content_stream.take() {
             let result;
             match stream.recv_async().await {
@@ -62,7 +63,16 @@ impl FileSender for FlumeFile {
     }
 }
 
-pub struct WithDelims;
+pub struct WithDelims {
+    escape_byte: Option<u8>,
+    starting_delimiter: Option<Vec<u8>>,
+    ending_delimiter: Option<Vec<u8>>,
+}
+// impl WithDelims {
+//     fn new(escape_byte: Option<u8>, starting_delimiter: Option<Vec<u8>>, ending_delimiter: Option<Vec<u8>>) -> WithDelims {
+
+//     }
+// }
 
 pub trait ConvertWithDelims {
     // type FrameOutput;
@@ -211,11 +221,9 @@ impl ConvertWithDelims for AcknowlageFrame {
 impl<T: ConvertWithDelims> Convert<WithDelims> for T {
     fn to_bytes(
         &self,
-        escape_byte: Option<u8>,
-        starting_delimiter: Option<Vec<u8>>,
-        ending_delimiter: Option<Vec<u8>>,
+        opts: WithDelims,
     ) -> Result<Vec<u8>, FileFrameStatus> {
-        ConvertWithDelims::to_bytes(self, escape_byte, starting_delimiter, ending_delimiter)
+        ConvertWithDelims::to_bytes(self, opts.escape_byte, opts.starting_delimiter, opts.ending_delimiter)
     }
 }
 
@@ -237,7 +245,7 @@ impl StreamReceiver for TcpFsReceiver {
             self.escape_byte,
         )
     }
-    async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
+    async fn recv(&mut self) -> Result<Vec<u8>, FileStreamError> {
         match self.rx.recv_async().await {
             Ok(bytes) => Ok(bytes),
             Err(e) => Err(FileStreamError::Disconnect),
@@ -326,15 +334,16 @@ impl Default for TcpFsSender {
 
 #[async_trait]
 impl StreamSender for TcpFsSender {
-    async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
+    type Opts = WithDelims;
+    async fn encode_frame<S>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
-        S: Convert<W> + Send,
+        S: Convert<WithDelims> + Send,
     {
-        frame.to_bytes(
-            self.escape_byte,
-            self.start_delimiter.clone(),
-            self.end_delimiter.clone(),
-        )
+        frame.to_bytes(WithDelims {
+            escape_byte: self.escape_byte,
+            starting_delimiter: self.start_delimiter.clone(),
+            ending_delimiter: self.end_delimiter.clone(),
+        })
     }
     async fn send(&mut self, bytes: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.tx.send_async(bytes).await?;
@@ -396,15 +405,16 @@ impl StateDelims for TcpFsBidirectional {
 
 #[async_trait]
 impl StreamSender for TcpFsBidirectional {
-    async fn encode_frame<S, W>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
+    type Opts = WithDelims;
+    async fn encode_frame<S>(&self, frame: S) -> Result<Vec<u8>, FileFrameStatus>
     where
-        S: Convert<W> + Send,
+        S: Convert<WithDelims> + Send,
     {
-        frame.to_bytes(
-            self.escape_byte,
-            self.start_delimiter.clone(),
-            self.end_delimiter.clone(),
-        )
+        frame.to_bytes(WithDelims{
+            escape_byte: self.escape_byte,
+            starting_delimiter: self.start_delimiter.clone(),
+            ending_delimiter: self.end_delimiter.clone(),
+        })
     }
     async fn send(&mut self, bytes: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.tx.send_async(bytes).await?;
@@ -422,7 +432,7 @@ impl StreamReceiver for TcpFsBidirectional {
             self.escape_byte,
         )
     }
-    async fn get_chunk(&self) -> Result<Vec<u8>, FileStreamError> {
+    async fn recv(&mut self) -> Result<Vec<u8>, FileStreamError> {
         match self.rx.recv_async().await {
             Ok(bytes) => Ok(bytes),
             Err(e) => Err(FileStreamError::Disconnect),
