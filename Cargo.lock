@@ -38,7 +38,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "client"
+name = "client_delimited"
+version = "0.1.0"
+dependencies = [
+ "flume",
+ "input-macro",
+ "networked_filesystem",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "client_length"
 version = "0.1.0"
 dependencies = [
  "flume",
@@ -482,7 +494,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "server"
+name = "server_delimited"
+version = "0.1.0"
+dependencies = [
+ "flume",
+ "networked_filesystem",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "server_length"
 version = "0.1.0"
 dependencies = [
  "flume",

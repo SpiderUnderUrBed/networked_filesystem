@@ -19,12 +19,13 @@ use tokio::sync::watch;
 // use length_delimited_v2::*;
 
 use crate::flume_delmited_v1::flume_delimited::ConvertWithDelims;
-use crate::length_delimited_v2::length_delimited_v2::WithLength;
+use crate::length_delimited_v2::length_delimited::ConvertWithLength;
+use crate::length_delimited_v2::length_delimited::WithLength;
 
 pub mod chain;
 mod delimited_commons;
-mod flume_delmited_v1;
-mod length_delimited_v2;
+pub mod flume_delmited_v1;
+pub mod length_delimited_v2;
 
 // use flume_delmited_v1::flume_delimited::*;
 #[derive(Clone, TryFromPrimitive, Debug, PartialEq)]
@@ -88,9 +89,6 @@ pub trait FrameHandler {
     fn get_chunks(&self) -> Vec<u8>;
 }
 
-pub trait ConvetWithLength {
-    fn to_bytes(&self) -> Result<Vec<u8>, FileFrameStatus>;
-}
 
 
 pub trait Convert<W> {
@@ -403,7 +401,9 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
     pub async fn receive_operation(
         &mut self,
         fs_state_id: u8,
-    ) -> Result<(), StreamableFileSystemErrors> {
+    ) -> Result<(), StreamableFileSystemErrors> 
+        where <S as StreamReceiver>::FrameOutput: Debug
+    {
         let remainder = &mut 0;
 
         loop {
@@ -479,6 +479,7 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                                             }
                                         })?;
                                 } else {
+                                    println!("no valid frame");
                                     //return Err(StreamableFileSystemErrors::NoFrameFound(chunks));
                                 }
                             }
@@ -1222,14 +1223,14 @@ where
 impl<S, Fr> FrameWrite<WithLength, Fr> for S
 where
     S: BidirectionalStream + Send,
-    Fr: ConvetWithLength + Sync,
+    Fr: ConvertWithLength + Sync,
 {
     async fn frame_write<F: Send>(
         fs: &mut RemoteFileSystem<S, F>,
         frame: &Fr,
     ) -> Result<(), FileHandleStatus> {
         let bytes =
-            ConvetWithLength::to_bytes(frame).map_err(|_| FileHandleStatus::IncorrectData)?;
+            ConvertWithLength::to_bytes(frame).map_err(|_| FileHandleStatus::IncorrectData)?;
         fs.state.send(bytes).await.map_err(FileHandleStatus::Any)
     }
 }

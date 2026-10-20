@@ -9,8 +9,9 @@ use tokio::{
 
 use input_macro::input;
 use networked_filesystem::{
-    Codec, Direction, LocalState, Operation, RemoteFileSystem, flume_delimited::{FlumeFile, TcpFsSender},
+    Codec, Direction, LocalState, Operation, RemoteFileSystem,
 };
+use networked_filesystem::flume_delmited_v1::flume_delimited::{FlumeFile, TcpFsSender};
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;

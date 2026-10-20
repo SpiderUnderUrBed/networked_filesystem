@@ -10,16 +10,24 @@ flume = "0.12.0"
 
 [workspace]
 resolver = "3"
-members = ["demos/delimited/server", "demos/delimited/client", "networked_filesystem_core"]
+members = ["demos/delimited/server", "demos/delimited/client", "demos/length/client", "demos/length/server", "networked_filesystem_core"]
 
 # Source - https://stackoverflow.com/a/36604610
 # Posted by Dogbert, modified by community. See post 'Timeline' for change history
 # Retrieved 2026-07-11, License - CC BY-SA 4.0
 
 [[bin]]
-name = "client"
+name = "client_delimited"
 path = "demos/delimited/client/src/main.rs"
 
 [[bin]]
-name = "server"
+name = "server_delimited"
 path = "demos/delimited/server/src/main.rs"
+
+[[bin]]
+name = "client_length"
+path = "demos/length/client/src/main.rs"
+
+[[bin]]
+name = "server_length"
+path = "demos/length/server/src/main.rs"

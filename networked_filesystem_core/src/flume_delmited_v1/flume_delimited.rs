@@ -462,7 +462,7 @@ impl TcpFsBidirectional {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct FrameEncoder {
     escape_byte: Option<u8>,
     starting_delimiter: Option<Vec<u8>>,

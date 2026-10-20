@@ -1,4 +1,4 @@
-use networked_filesystem::flume_delimited::{FlumeFile, TcpFsReceiver};
+use networked_filesystem::flume_delmited_v1::flume_delimited::{FlumeFile, TcpFsReceiver, TcpFsSender};
 use networked_filesystem::{Direction, LocalState, RemoteFileSystem};
 
 use std::sync::Arc;
