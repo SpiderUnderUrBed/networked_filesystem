@@ -86,8 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 filesystem.create_state(
                     0,
                     LocalState {
-                        // TODO: set back to /
-                        location: "/".to_string(),
+                        location:"/".to_string(), 
+                        starting_cursor_position: None, 
+                        ending_cursor_position: None 
                     },
                 );
 
@@ -161,8 +162,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 filesystem.create_state(
                     0,
                     LocalState {
-                        // TODO: set back to /
-                        location: "/home/spiderunderurbed/projects/networked_filesystem/".to_string(),
+                        location:"/home/spiderunderurbed/projects/networked_filesystem/".to_string(), 
+                        starting_cursor_position: None, 
+                        ending_cursor_position: None 
                     },
                 );
 

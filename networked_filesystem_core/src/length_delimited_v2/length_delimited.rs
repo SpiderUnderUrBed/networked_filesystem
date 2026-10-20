@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::sink::With;
 use tokio::sync::mpsc;
 
-use crate::{AcknowlageFrame, Convert, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StreamReceiver, StreamSender, TransportRecvError};
+use crate::{AcknowlageFrame, Convert, CursorFrame, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StreamReceiver, StreamSender, TransportRecvError};
 
 pub struct MspcFile {
     pub state_id: u8,
@@ -166,6 +166,40 @@ impl ConvertWithLength for AcknowlageFrame {
     }
 }
 
+impl ConvertWithLength for CursorFrame {
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        let mut bytes_frame = Vec::new();
+        if let Some(ref direction) = self.direction {
+            bytes_frame.push(direction.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(ref operation) = self.operation {
+            bytes_frame.push(operation.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(starting_cursor) = self.starting_cursor {
+            bytes_frame.push(1);
+            bytes_frame.extend(starting_cursor.to_le_bytes());
+        } else {
+            bytes_frame.push(0);
+        }
+        if let Some(ending_cursor) = self.ending_cursor {
+            bytes_frame.push(1);
+            bytes_frame.extend(ending_cursor.to_le_bytes());
+        } else {
+            bytes_frame.push(0);
+        }
+
+
+        let encoder = FrameEncoder::new();
+        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
+        Ok(bytes_frame)
+    }
+}
 
 impl<T: ConvertWithLength> Convert<WithLength> for T {
     fn to_bytes(
@@ -270,8 +304,6 @@ impl FrameHandler for FrameEncoder {
             .map_err(|_| FileFrameStatus::NotValidFrame)?;
         let amount = u64::from_le_bytes(amount_bytes);
         if total_chunks.len() >= std::mem::size_of::<u64>() + amount as usize {
-            // let chunks = &total_chunks[std::mem::size_of::<u64>()..amount as usize];
-            // self.file_chunks = self.file_chunks[(std::mem::size_of::<u64>() + amount as usize) - self.remainder.len()..].to_vec();
             let remainder = total_chunks[std::mem::size_of::<u64>() + amount as usize..].to_vec();
             self.file_chunks = total_chunks[std::mem::size_of::<u64>()..std::mem::size_of::<u64>() + amount as usize].to_vec();
             subframes.push_front(self.clone());

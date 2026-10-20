@@ -25,7 +25,9 @@ async fn main() -> std::io::Result<()> {
         filesystem.create_state(
             0,
             LocalState {
-                location: "/".to_string(),
+                location:"/".to_string(), 
+                starting_cursor_position: None, 
+                ending_cursor_position: None 
             },
         );
         let arc_filesystem = Arc::new(RwLock::new(filesystem));
