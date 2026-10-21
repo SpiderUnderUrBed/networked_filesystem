@@ -1210,6 +1210,16 @@ impl ErrorFrame {
             state.get_ending_delims(),
         )
     }
+    pub async fn handle<S, F, W>(mut filesystem: RemoteFileSystem<S, F>) 
+    where
+        S: FrameWrite<W, ErrorFrame>,
+        F: Send,
+    {
+        let frame = ErrorFrame::new(Some(filesystem.direction.clone()));
+        if let Err(e) = <S as FrameWrite<W, ErrorFrame>>::frame_write(&mut filesystem, &frame).await {
+            println!("{:#?}", e);
+        }
+    }
 }
 impl FrameCommons for ErrorFrame {
     fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
