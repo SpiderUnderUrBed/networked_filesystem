@@ -1192,7 +1192,7 @@ pub struct ErrorFrame {
 }
 
 impl ErrorFrame {
-    fn new(direction: Option<Direction>) -> ErrorFrame {
+    pub fn new(direction: Option<Direction>) -> ErrorFrame {
         ErrorFrame {
             direction,
             operation: Some(Operation::Error),
@@ -1210,7 +1210,7 @@ impl ErrorFrame {
             state.get_ending_delims(),
         )
     }
-    pub async fn handle<S, F, W>(mut filesystem: RemoteFileSystem<S, F>) 
+    pub async fn handle<W, S, F>(mut filesystem: RemoteFileSystem<S, F>)
     where
         S: FrameWrite<W, ErrorFrame>,
         F: Send,
