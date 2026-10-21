@@ -6,6 +6,7 @@ use multipeek::IteratorExt;
 
 use crate::CursorFrame;
 use crate::Direction;
+use crate::ErrorFrame;
 use crate::Operation;
 use crate::{
     AcknowlageFrame, BidirectionalStream, Convert, DrainFrame, EofFrame, FileFrame,
@@ -218,6 +219,31 @@ impl ConvertWithDelims for AcknowlageFrame {
         Ok(bytes_frame)
     }
 }
+
+impl ConvertWithDelims for ErrorFrame {
+    fn to_bytes(
+        &self,
+        escape_byte: Option<u8>,
+        starting_delimiter: Option<Vec<u8>>,
+        ending_delimiter: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        let mut bytes_frame = Vec::new();
+        if let Some(ref direction) = self.direction {
+            bytes_frame.push(direction.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(ref operation) = self.operation {
+            bytes_frame.push(operation.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        let encoder = FrameEncoder::new(starting_delimiter, ending_delimiter, escape_byte);
+        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
+        Ok(bytes_frame)
+    }
+}
+
 impl ConvertWithDelims for CursorFrame {
     fn to_bytes(
         &self,

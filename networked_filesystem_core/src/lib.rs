@@ -54,7 +54,8 @@ pub enum Operation {
     Drain = 4,
     None = 5,
     Acknowlage = 6,
-    Cursor = 7
+    Cursor = 7,
+    Error = 9
 }
 
 #[derive(Clone, TryFromPrimitive, Debug)]
@@ -676,6 +677,7 @@ impl<S: StreamSender + Default, F: FileSender> RemoteFileSystem<S, F> {
             },
             Operation::Drain => return Err(StreamableFileSystemErrors::None),
             Operation::Acknowlage => return Err(StreamableFileSystemErrors::None),
+            Operation::Error => return Err(StreamableFileSystemErrors::None),
         }
     }
 }
@@ -1025,6 +1027,7 @@ where
                     Err(StreamableFileSystemErrors::NoStateGiven)
                 }
             },
+            Operation::Error => return Err(StreamableFileSystemErrors::None),
         }
     }
 }
@@ -1176,6 +1179,74 @@ impl Decodable for AcknowlageFrame {
         Ok(frame)
     }
 }
+
+#[derive(Debug, Default, Clone)]
+pub struct ErrorFrame {
+    direction: Option<Direction>,
+    operation: Option<Operation>,
+}
+
+impl ErrorFrame {
+    fn new(direction: Option<Direction>) -> ErrorFrame {
+        ErrorFrame {
+            direction,
+            operation: Some(Operation::Error),
+        }
+    }
+    pub fn to_bytes<S, F>(filesystem: RemoteFileSystem<S, F>) -> Result<Vec<u8>, FileFrameStatus>
+    where
+        S: StateDelims,
+    {
+        let state = filesystem.state;
+        ConvertWithDelims::to_bytes(
+            &ErrorFrame::new(Some(filesystem.direction)),
+            state.get_escape_byte(),
+            state.get_starting_delims(),
+            state.get_ending_delims(),
+        )
+    }
+}
+impl FrameCommons for ErrorFrame {
+    fn get_direction(&self) -> Result<Direction, FileFrameStatus> {
+        Ok(self.direction.clone().unwrap())
+    }
+    fn get_operation(&self) -> Result<Operation, FileFrameStatus> {
+        Ok(self.operation.clone().unwrap())
+    }
+}
+
+impl Decodable for ErrorFrame {
+    type Output = Self;
+
+    fn decode(mut bytes: Vec<u8>) -> Result<Self::Output, FileFrameStatus> {
+        let mut frame = ErrorFrame::default();
+        if let Some(byte) = bytes.get(0) {
+            if let Ok(direction) = Direction::try_from_primitive(*byte) {
+                frame.direction = Some(direction);
+            } else {
+                return Err(FileFrameStatus::NotValidFrame);
+            }
+            bytes.remove(0);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(byte) = bytes.get(0) {
+            if let Ok(operation) = Operation::try_from_primitive(*byte) {
+                if !matches!(operation, Operation::Error) {
+                    return Err(FileFrameStatus::NotCorrectFrame);
+                }
+                frame.operation = Some(operation);
+            } else {
+                return Err(FileFrameStatus::NotValidFrame);
+            }
+            bytes.remove(0);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        Ok(frame)
+    }
+}
+
 
 #[derive(Debug, Default, Clone)]
 pub struct CursorFrame {

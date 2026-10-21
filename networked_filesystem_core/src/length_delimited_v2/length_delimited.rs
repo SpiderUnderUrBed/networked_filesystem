@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::sink::With;
 use tokio::sync::mpsc;
 
-use crate::{AcknowlageFrame, Convert, CursorFrame, DrainFrame, EofFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StreamReceiver, StreamSender, TransportRecvError};
+use crate::{AcknowlageFrame, Convert, CursorFrame, DrainFrame, EofFrame, ErrorFrame, FileFrame, FileFrameStatus, FileSender, FileStreamError, FrameCommons, FrameHandler, SetFrame, StreamReceiver, StreamSender, TransportRecvError};
 
 pub struct MspcFile {
     pub state_id: u8,
@@ -146,6 +146,27 @@ impl ConvertWithLength for DrainFrame {
 }
 
 impl ConvertWithLength for AcknowlageFrame {
+    fn to_bytes(
+        &self,
+    ) -> Result<Vec<u8>, FileFrameStatus> {
+        let mut bytes_frame = Vec::new();
+        if let Some(ref direction) = self.direction {
+            bytes_frame.push(direction.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        if let Some(ref operation) = self.operation {
+            bytes_frame.push(operation.clone() as u8);
+        } else {
+            return Err(FileFrameStatus::NotValidFrame);
+        }
+        let encoder = FrameEncoder::new();
+        bytes_frame = encoder.encode_bytes(bytes_frame, Vec::new());
+        Ok(bytes_frame)
+    }
+}
+
+impl ConvertWithLength for ErrorFrame {
     fn to_bytes(
         &self,
     ) -> Result<Vec<u8>, FileFrameStatus> {
