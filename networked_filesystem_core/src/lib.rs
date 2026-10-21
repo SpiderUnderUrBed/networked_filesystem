@@ -495,7 +495,7 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                                                 StreamableFileSystemErrors::Any(e)
                                             }
                                         })?;
-                                } else if let Ok(cursor_frame) = CursorFrame::decode(chunks) {
+                                } else if let Ok(cursor_frame) = CursorFrame::decode(chunks.clone()) {
                                     CursorFrame::handle(cursor_frame, fs_state_id, self)
                                         .map_err(|e| match e {
                                             FileHandleStatus::NoStateGiven => {
@@ -511,7 +511,10 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
                                                 StreamableFileSystemErrors::Any(e)
                                             }
                                         })?;
+                                } else if let Ok(_) = ErrorFrame::decode(chunks){
+                                    return Err(StreamableFileSystemErrors::Unknown);
                                 }
+
                             }
                             if let Some(last_frame) = frames.iter().last() {
                                 self.remainder.extend(last_frame.get_remainder().clone());
@@ -839,7 +842,7 @@ where
                                                 }
                                             })?;
                                     }
-                                } else if let Ok(cursor_frame) = CursorFrame::decode(chunks) {
+                                } else if let Ok(cursor_frame) = CursorFrame::decode(chunks.clone()) {
                                     CursorFrame::handle(cursor_frame, fs_state_id, self)
                                         .map_err(|e| match e {
                                             FileHandleStatus::NoStateGiven => {
@@ -855,6 +858,8 @@ where
                                                 StreamableFileSystemErrors::Any(e)
                                             }
                                         })?;
+                                } else if let Ok(_) = ErrorFrame::decode(chunks){
+                                    return Err(StreamableFileSystemErrors::Unknown);
                                 }
                             }
                             if let Some(last_frame) = frames.iter().last() {
