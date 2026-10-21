@@ -266,7 +266,6 @@ impl<T: ConvertWithDelims> Convert<WithDelims> for T {
 }
 
 pub struct TcpFsReceiver {
-    pub tx: flume::Sender<Vec<u8>>,
     pub rx: flume::Receiver<Vec<u8>>,
     start_delimiter: Option<Vec<u8>>,
     end_delimiter: Option<Vec<u8>>,
@@ -291,9 +290,8 @@ impl StreamReceiver for TcpFsReceiver {
     }
 }
 impl TcpFsReceiver {
-    pub fn new(tx: flume::Sender<Vec<u8>>, rx: flume::Receiver<Vec<u8>>) -> TcpFsReceiver {
+    pub fn new(rx: flume::Receiver<Vec<u8>>) -> TcpFsReceiver {
         TcpFsReceiver {
-            tx,
             rx,
             start_delimiter: None,
             end_delimiter: None,
@@ -310,14 +308,10 @@ impl TcpFsReceiver {
         self.escape_byte = Some(escape_byte);
     }
 
-    pub fn send(&mut self, bytes: Vec<u8>) {
-        let _ = self.tx.send(bytes);
-    }
 }
 impl Clone for TcpFsReceiver {
     fn clone(&self) -> Self {
         Self {
-            tx: self.tx.clone(),
             rx: self.rx.clone(),
             start_delimiter: self.start_delimiter.clone(),
             end_delimiter: self.end_delimiter.clone(),
@@ -327,9 +321,8 @@ impl Clone for TcpFsReceiver {
 }
 impl Default for TcpFsReceiver {
     fn default() -> Self {
-        let (tx, rx) = flume::bounded(32);
+        let (_, rx) = flume::bounded(32);
         Self {
-            tx,
             rx,
             start_delimiter: None,
             end_delimiter: None,
@@ -340,7 +333,6 @@ impl Default for TcpFsReceiver {
 
 pub struct TcpFsSender {
     pub tx: flume::Sender<Vec<u8>>,
-    pub rx: flume::Receiver<Vec<u8>>,
     start_delimiter: Option<Vec<u8>>,
     end_delimiter: Option<Vec<u8>>,
     escape_byte: Option<u8>,
@@ -349,7 +341,6 @@ impl Clone for TcpFsSender {
     fn clone(&self) -> Self {
         Self {
             tx: self.tx.clone(),
-            rx: self.rx.clone(),
             start_delimiter: self.start_delimiter.clone(),
             end_delimiter: self.end_delimiter.clone(),
             escape_byte: self.escape_byte.clone(),
@@ -359,10 +350,9 @@ impl Clone for TcpFsSender {
 
 impl Default for TcpFsSender {
     fn default() -> Self {
-        let (tx, rx) = flume::unbounded();
+        let (tx, _) = flume::unbounded();
         Self {
             tx,
-            rx,
             start_delimiter: Default::default(),
             end_delimiter: Default::default(),
             escape_byte: Default::default(),
@@ -392,7 +382,7 @@ impl TcpFsSender {
     pub fn new(rx: flume::Receiver<Vec<u8>>, tx: flume::Sender<Vec<u8>>) -> TcpFsSender {
         TcpFsSender {
             tx,
-            rx,
+            // rx,
             start_delimiter: None,
             end_delimiter: None,
             escape_byte: None,
@@ -411,6 +401,8 @@ impl TcpFsSender {
 
 #[derive(Clone)]
 pub struct TcpFsBidirectional {
+    // pub out_tx: flume::Sender<Vec<u8>>,
+    // pub out_rx: flume::Receiver<Vec<u8>>,
     pub tx: flume::Sender<Vec<u8>>,
     pub rx: flume::Receiver<Vec<u8>>,
     start_delimiter: Option<Vec<u8>>,

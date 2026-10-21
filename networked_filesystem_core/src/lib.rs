@@ -384,8 +384,14 @@ impl<S: Default, F> RemoteFileSystem<S, F> {
     pub fn set_codec(&mut self, codec: Codec) {
         self.codec = codec;
     }
+    pub fn get_state(&self) -> &S {
+        &self.state
+    }
     pub fn set_direction(&mut self, direction: Direction) {
         self.direction = direction;
+    }
+    pub fn get_direction(&self) -> Direction {
+        self.direction.clone()
     }
     pub fn create_state(&mut self, state_id: u8, state: LocalState) {
         self.local_state.insert(state_id, state);
@@ -1384,8 +1390,12 @@ where
             fs.state.get_starting_delims(),
             fs.state.get_ending_delims(),
         )
-        .map_err(|_| FileHandleStatus::IncorrectData)?;
-        fs.state.send(bytes).await.map_err(FileHandleStatus::Any)
+        .map_err(|e| {
+            FileHandleStatus::IncorrectData
+        })?;
+        fs.state.send(bytes).await.map_err(|e| {
+            FileHandleStatus::Any(e)
+        })
     }
 }
 

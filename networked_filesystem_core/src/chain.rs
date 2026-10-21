@@ -134,14 +134,18 @@ where
                 } else {
                     return Err(StreamableFileSystemErrors::IncorrectData);
                 }
-                (self.f)(state_id, output, fs).await.map_err(|e| match e {
-                    FileHandleStatus::NoStateGiven => StreamableFileSystemErrors::NoStateGiven,
-                    FileHandleStatus::IncorrectData => StreamableFileSystemErrors::IncorrectData,
-                    FileHandleStatus::IncorrectStateAsked => {
-                        StreamableFileSystemErrors::IncorrectStateAsked
+                (self.f)(state_id, output, fs).await.map_err(|e| 
+                    { 
+                        match e {
+                            FileHandleStatus::NoStateGiven => StreamableFileSystemErrors::NoStateGiven,
+                            FileHandleStatus::IncorrectData => StreamableFileSystemErrors::IncorrectData,
+                            FileHandleStatus::IncorrectStateAsked => {
+                                StreamableFileSystemErrors::IncorrectStateAsked
+                            }
+                            FileHandleStatus::Any(e) => StreamableFileSystemErrors::Any(e),
+                        }
                     }
-                    FileHandleStatus::Any(e) => StreamableFileSystemErrors::Any(e),
-                })?;
+                )?;
             }
             Err(e) => {
                 if !matches!(e, FileFrameStatus::NotCorrectFrame) {
@@ -154,7 +158,7 @@ where
 }
 
 impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'_, H, S, FT> {
-    pub fn chain<T: Decodable, F, Idx>(&mut self, f: F) -> ChainBuilder<H::Output, S, FT>
+    pub fn chain<T: Decodable, F, Idx>(&mut self, f: F) -> ChainBuilder<'_, H::Output, S, FT>
     where
         H: InsertOrReplace<T, F, Idx, S, FT>,
         F: for<'a> Fn(
@@ -174,7 +178,9 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
         state_id: u8,
         bytes: Vec<u8>,
         remainder: &mut u64,
-    ) -> Result<(), StreamableFileSystemErrors> {
+    ) -> Result<(), StreamableFileSystemErrors> 
+        where <S as StreamReceiver>::FrameOutput: std::fmt::Debug
+    {
         let mut total_bytes = Vec::new();
         total_bytes.extend(self.fs.remainder.clone());
         self.fs.remainder = Vec::new();
@@ -211,7 +217,9 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
             },
         }
     }
-    pub async fn run(&mut self, state_id: u8) -> Result<(), StreamableFileSystemErrors> {
+    pub async fn run(&mut self, state_id: u8) -> Result<(), StreamableFileSystemErrors> 
+        where <S as StreamReceiver>::FrameOutput: std::fmt::Debug
+    {
         let remainder = &mut 0;
 
         loop {
@@ -219,7 +227,7 @@ impl<H: Execute<State = S, FileType = FT>, S: StreamReceiver, FT> ChainBuilder<'
                 Ok(bytes) => {
                     self.decode_bytes(state_id, bytes, remainder).await?;
                 }
-                Err(_) => {
+                Err(e) => {
                     return Err(StreamableFileSystemErrors::Unknown);
                 }
             }
