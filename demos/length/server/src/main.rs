@@ -55,7 +55,7 @@ async fn main() -> std::io::Result<()> {
                         match result {
                             Ok(0) => {
                                 println!("{} disconnected", addr);
-                                break;
+                            break;
                             }
                             Ok(n) => {
                                 let data = &temp_buf[..n];
@@ -69,7 +69,7 @@ async fn main() -> std::io::Result<()> {
                             }
                         }
                     },
-                    _ = filesystem_for_read_task.receive_operation(0) => {
+                    _ = filesystem_for_read_task.receive_operation(0, None) => {
                         println!("finished receiving");
                     }
                 }

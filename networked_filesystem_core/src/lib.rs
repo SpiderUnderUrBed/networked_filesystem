@@ -421,120 +421,126 @@ impl<S: Default + StreamReceiver, F> RemoteFileSystem<S, F> {
     pub async fn receive_operation(
         &mut self,
         fs_state_id: u8,
+        mut rx: Option<&mut (dyn Stream<Item = Vec<u8>> + Unpin + Send)>,
     ) -> Result<(), StreamableFileSystemErrors> 
         where <S as StreamReceiver>::FrameOutput: Debug
     {
         let remainder = &mut 0;
 
         loop {
-            match self.state.recv().await {
-                Ok(bytes) => {
-                    let mut total_bytes = Vec::new();
-                    total_bytes.extend(self.remainder.clone());
-                    self.remainder = Vec::new();
-                    total_bytes.extend(bytes);
-                    let mut frame = self.state.create_frame_handler();
-                    frame.set_chunks(self.remainder.clone());
+            let bytes = if let Some(rx) = rx.as_mut() {
+                rx.next().await
+            } else if let Ok(bytes) = self.state.recv().await {
+                Some(bytes)
+            } else {
+                None
+            };
 
-                    match frame.append_bytes_recv(&total_bytes, remainder) {
-                        Ok(frames) => {
-                            for frame in &frames {
-                                if let Ok(direction) = frame.get_direction() {
-                                    if direction == self.direction {
-                                        continue;
-                                    }
-                                } else {
-                                    continue;
-                                }
-                                let chunks = frame.get_chunks();
-                                if let Ok(file_frame) = FileFrame::decode(chunks.clone()) {
-                                    FileFrame::handle(file_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(set_frame) = SetFrame::decode(chunks.clone()) {
-                                    SetFrame::handle(set_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(eof_frame) = EofFrame::decode(chunks.clone()) {
-                                    EofFrame::handle(eof_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(cursor_frame) = CursorFrame::decode(chunks.clone()) {
-                                    CursorFrame::handle(cursor_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(_) = ErrorFrame::decode(chunks){
-                                    return Err(StreamableFileSystemErrors::Unknown);
-                                }
+            let Some(bytes) = bytes else {
+                break Ok(());
+            };
 
+            let mut total_bytes = Vec::new();
+            total_bytes.extend(self.remainder.clone());
+            self.remainder = Vec::new();
+            total_bytes.extend(bytes);
+            let mut frame = self.state.create_frame_handler();
+            frame.set_chunks(self.remainder.clone());
+
+            match frame.append_bytes_recv(&total_bytes, remainder) {
+                Ok(frames) => {
+                    for frame in &frames {
+                        if let Ok(direction) = frame.get_direction() {
+                            if direction == self.direction {
+                                continue;
                             }
-                            if let Some(last_frame) = frames.iter().last() {
-                                self.remainder.extend(last_frame.get_remainder().clone());
-                            }
+                        } else {
+                            continue;
                         }
-                        Err(e) => match e {
-                            FileFrameStatus::NotValidFrame => {}
-                            FileFrameStatus::NoFrameDecoding => {}
-                            FileFrameStatus::FrameNoBegins => {}
-                            FileFrameStatus::FrameNoEnds => {
-                                let remainder = total_bytes;
-                                self.remainder = remainder.to_vec();
-                            }
-                            FileFrameStatus::NotCorrectFrame => {}
-                        },
+                        let chunks = frame.get_chunks();
+                        if let Ok(file_frame) = FileFrame::decode(chunks.clone()) {
+                            FileFrame::handle(file_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(set_frame) = SetFrame::decode(chunks.clone()) {
+                            SetFrame::handle(set_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(eof_frame) = EofFrame::decode(chunks.clone()) {
+                            EofFrame::handle(eof_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(cursor_frame) = CursorFrame::decode(chunks.clone()) {
+                            CursorFrame::handle(cursor_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(_) = ErrorFrame::decode(chunks){
+                            return Err(StreamableFileSystemErrors::Unknown);
+                        }
+
+                    }
+                    if let Some(last_frame) = frames.iter().last() {
+                        self.remainder.extend(last_frame.get_remainder().clone());
                     }
                 }
-                Err(e) => {
-                    break Ok(());
-                }
+                Err(e) => match e {
+                    FileFrameStatus::NotValidFrame => {}
+                    FileFrameStatus::NoFrameDecoding => {}
+                    FileFrameStatus::FrameNoBegins => {}
+                    FileFrameStatus::FrameNoEnds => {
+                        let remainder = total_bytes;
+                        self.remainder = remainder.to_vec();
+                    }
+                    FileFrameStatus::NotCorrectFrame => {}
+                },
             }
         }
     }
@@ -753,137 +759,142 @@ where
         let remainder = &mut 0;
 
         loop {
-            // let rx_ref = rx.as_deref_mut();
-            match self.state.recv().await {
-                Ok(bytes) => {
-                    let mut total_bytes = Vec::new();
-                    total_bytes.extend(self.remainder.clone());
-                    self.remainder = Vec::new();
-                    total_bytes.extend(bytes);
-                    let mut frame = self.state.create_frame_handler();
-                    frame.set_chunks(self.remainder.clone());
+            let bytes = if let Some(rx) = rx.as_mut() {
+                rx.next().await
+            } else if let Ok(bytes) = self.state.recv().await {
+                Some(bytes)
+            } else {
+                None
+            };
 
-                    match frame.append_bytes_recv(&total_bytes, remainder) {
-                        Ok(frames) => {
-                            for frame in &frames {
-                                if let Ok(direction) = frame.get_direction() {
-                                    if direction == self.direction {
-                                        continue;
-                                    }
-                                } else {
-                                    continue;
-                                }
-                                let chunks = frame.get_chunks();
-                                if let Ok(file_frame) = FileFrame::decode(chunks.clone()) {
-                                    FileFrame::handle(file_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(set_frame) = SetFrame::decode(chunks.clone()) {
-                                    SetFrame::handle(set_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(eof_frame) = EofFrame::decode(chunks.clone()) {
-                                    EofFrame::handle(eof_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                    // return Err(StreamableFileSystemErrors::NoFrameFound(chunks));
-                                } else if let Ok(drain_frame) = DrainFrame::decode(chunks.clone()) {
-                                    if let Some(rx) = rx.take() {
-                                        DrainFrame::handle(drain_frame, fs_state_id, self, rx)
-                                            .await
-                                            .map_err(|e| match e {
-                                                FileHandleStatus::NoStateGiven => {
-                                                    StreamableFileSystemErrors::NoStateGiven
-                                                }
-                                                FileHandleStatus::IncorrectData => {
-                                                    StreamableFileSystemErrors::IncorrectData
-                                                }
-                                                FileHandleStatus::IncorrectStateAsked => {
-                                                    StreamableFileSystemErrors::IncorrectStateAsked
-                                                }
-                                                FileHandleStatus::Any(e) => {
-                                                    StreamableFileSystemErrors::Any(e)
-                                                }
-                                            })?;
-                                    }
-                                } else if let Ok(cursor_frame) = CursorFrame::decode(chunks.clone()) {
-                                    CursorFrame::handle(cursor_frame, fs_state_id, self)
-                                        .map_err(|e| match e {
-                                            FileHandleStatus::NoStateGiven => {
-                                                StreamableFileSystemErrors::NoStateGiven
-                                            }
-                                            FileHandleStatus::IncorrectData => {
-                                                StreamableFileSystemErrors::IncorrectData
-                                            }
-                                            FileHandleStatus::IncorrectStateAsked => {
-                                                StreamableFileSystemErrors::IncorrectStateAsked
-                                            }
-                                            FileHandleStatus::Any(e) => {
-                                                StreamableFileSystemErrors::Any(e)
-                                            }
-                                        })?;
-                                } else if let Ok(_) = ErrorFrame::decode(chunks){
-                                    return Err(StreamableFileSystemErrors::Unknown);
-                                }
+            let Some(bytes) = bytes else {
+                break Ok(());
+            };
+
+            let mut total_bytes = Vec::new();
+            total_bytes.extend(self.remainder.clone());
+            self.remainder = Vec::new();
+            total_bytes.extend(bytes);
+            let mut frame = self.state.create_frame_handler();
+            frame.set_chunks(self.remainder.clone());
+
+            match frame.append_bytes_recv(&total_bytes, remainder) {
+                Ok(frames) => {
+                    for frame in &frames {
+                        if let Ok(direction) = frame.get_direction() {
+                            if direction == self.direction {
+                                continue;
                             }
-                            if let Some(last_frame) = frames.iter().last() {
-                                self.remainder.extend(last_frame.get_remainder().clone());
-                            }
+                        } else {
+                            continue;
                         }
-                        Err(e) => match e {
-                            FileFrameStatus::NotValidFrame => {}
-                            FileFrameStatus::NoFrameDecoding => {}
-                            FileFrameStatus::FrameNoBegins => {}
-                            FileFrameStatus::FrameNoEnds => {
-                                let remainder = total_bytes;
-                                self.remainder = remainder.to_vec();
+                        let chunks = frame.get_chunks();
+                        if let Ok(file_frame) = FileFrame::decode(chunks.clone()) {
+                            FileFrame::handle(file_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(set_frame) = SetFrame::decode(chunks.clone()) {
+                            SetFrame::handle(set_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(eof_frame) = EofFrame::decode(chunks.clone()) {
+                            EofFrame::handle(eof_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                            // return Err(StreamableFileSystemErrors::NoFrameFound(chunks));
+                        } else if let Ok(drain_frame) = DrainFrame::decode(chunks.clone()) {
+                            if let Some(rx) = rx.take() {
+                                DrainFrame::handle(drain_frame, fs_state_id, self, rx)
+                                    .await
+                                    .map_err(|e| match e {
+                                        FileHandleStatus::NoStateGiven => {
+                                            StreamableFileSystemErrors::NoStateGiven
+                                        }
+                                        FileHandleStatus::IncorrectData => {
+                                            StreamableFileSystemErrors::IncorrectData
+                                        }
+                                        FileHandleStatus::IncorrectStateAsked => {
+                                            StreamableFileSystemErrors::IncorrectStateAsked
+                                        }
+                                        FileHandleStatus::Any(e) => {
+                                            StreamableFileSystemErrors::Any(e)
+                                        }
+                                    })?;
                             }
-                            FileFrameStatus::NotCorrectFrame => {}
-                        },
+                        } else if let Ok(cursor_frame) = CursorFrame::decode(chunks.clone()) {
+                            CursorFrame::handle(cursor_frame, fs_state_id, self)
+                                .map_err(|e| match e {
+                                    FileHandleStatus::NoStateGiven => {
+                                        StreamableFileSystemErrors::NoStateGiven
+                                    }
+                                    FileHandleStatus::IncorrectData => {
+                                        StreamableFileSystemErrors::IncorrectData
+                                    }
+                                    FileHandleStatus::IncorrectStateAsked => {
+                                        StreamableFileSystemErrors::IncorrectStateAsked
+                                    }
+                                    FileHandleStatus::Any(e) => {
+                                        StreamableFileSystemErrors::Any(e)
+                                    }
+                                })?;
+                        } else if let Ok(_) = ErrorFrame::decode(chunks){
+                            return Err(StreamableFileSystemErrors::Unknown);
+                        }
+                    }
+                    if let Some(last_frame) = frames.iter().last() {
+                        self.remainder.extend(last_frame.get_remainder().clone());
                     }
                 }
-                Err(e) => {
-                    break Ok(());
-                }
+                Err(e) => match e {
+                    FileFrameStatus::NotValidFrame => {}
+                    FileFrameStatus::NoFrameDecoding => {}
+                    FileFrameStatus::FrameNoBegins => {}
+                    FileFrameStatus::FrameNoEnds => {
+                        let remainder = total_bytes;
+                        self.remainder = remainder.to_vec();
+                    }
+                    FileFrameStatus::NotCorrectFrame => {}
+                },
+            }
+        
             }
         }
-    }
 
     pub async fn create_bidirectional_handler(
         this: Arc<tokio::sync::Mutex<Self>>,

@@ -19,7 +19,7 @@ async fn main() -> std::io::Result<()> {
     loop {
         let (stream, addr) = listener.accept().await?;
         let (fs_tx, fs_rx) = flume::bounded(32);
-        let mut receiver = TcpFsReceiver::new(fs_tx.clone(), fs_rx);
+        let mut receiver = TcpFsReceiver::new(fs_rx);
         receiver.set_start_delimiter(r"\\\\f".as_bytes().to_vec());
         receiver.set_end_delimiter("////f".as_bytes().to_vec());
         let mut filesystem = RemoteFileSystem::<TcpFsReceiver, FlumeFile>::new(receiver);
@@ -63,7 +63,7 @@ async fn main() -> std::io::Result<()> {
                                 let data = &temp_buf[..n];
                                 //println!("read {} bytes: {:?}", n, data);
 
-                                filesystem_for_read_task.inner_mut().send(data.to_vec());
+                                let _ = fs_tx.send(data.to_vec());
                             }
                             Err(e) => {
                                 eprintln!("read error: {e}");
@@ -71,7 +71,7 @@ async fn main() -> std::io::Result<()> {
                             }
                         }
                     }
-                    _ = filesystem_for_read_task.receive_operation(0) => {
+                    _ = filesystem_for_read_task.receive_operation(0, None) => {
                         println!("finished receiving");
                     }
                 }
