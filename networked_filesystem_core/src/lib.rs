@@ -400,6 +400,9 @@ impl<S: Default, F> RemoteFileSystem<S, F> {
     pub fn remove_state(&mut self, state_id: u8) {
         self.local_state.remove(&state_id);
     }
+    pub fn get_state_mut(&mut self, state_id: u8) -> Option<&mut LocalState> {
+        self.local_state.get_mut(&state_id)
+    }
     pub fn set_operation(
         &mut self,
         operation: Operation,
